@@ -1,0 +1,116 @@
+# Real PQC-VPN Spoke Client with Post-Quantum Cryptography
+FROM ubuntu:22.04
+
+# Prevent interactive prompts
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TERM=xterm
+
+# Install base dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    cmake \
+    git \
+    wget \
+    curl \
+    pkg-config \
+    libssl-dev \
+    python3 \
+    python3-pip \
+    ninja-build \
+    unzip \
+    net-tools \
+    iproute2 \
+    iptables \
+    iputils-ping \
+    tcpdump \
+    supervisor \
+    sqlite3 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies for client monitoring
+RUN pip3 install psutil redis pycryptodome requests
+
+# Build and install liboqs (Open Quantum Safe library)
+WORKDIR /opt
+RUN git clone --depth 1 --branch main https://github.com/open-quantum-safe/liboqs.git && \
+    cd liboqs && \
+    mkdir build && cd build && \
+    cmake -GNinja -DCMAKE_INSTALL_PREFIX=/usr/local \
+                  -DOQS_BUILD_ONLY_LIB=ON \
+                  -DOQS_MINIMAL_BUILD="KEM_kyber_512;KEM_kyber_768;KEM_kyber_1024;SIG_dilithium_2;SIG_dilithium_3;SIG_dilithium_5;SIG_falcon_512;SIG_falcon_1024" \
+                  .. && \
+    ninja && ninja install && \
+    ldconfig
+
+# Build and install OpenSSL with OQS provider
+RUN git clone --depth 1 --branch OQS-OpenSSL_1_1_1-stable https://github.com/open-quantum-safe/openssl.git oqs-openssl && \
+    cd oqs-openssl && \
+    ./Configure linux-x86_64 \
+                --prefix=/usr/local/oqs-openssl \
+                --openssldir=/usr/local/oqs-openssl/ssl \
+                -Wl,-rpath,/usr/local/oqs-openssl/lib && \
+    make -j$(nproc) && make install
+
+# Build OQS-OpenSSL provider for OpenSSL 3.x
+RUN git clone --depth 1 --branch main https://github.com/open-quantum-safe/oqs-provider.git && \
+    cd oqs-provider && \
+    cmake -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_PREFIX_PATH=/usr/local \
+          -DCMAKE_INSTALL_PREFIX=/usr/local \
+          -S . -B _build && \
+    cmake --build _build && cmake --install _build
+
+# Build strongSwan with PQC support for spoke client
+RUN wget https://download.strongswan.org/strongswan-5.9.14.tar.bz2 && \
+    tar xjf strongswan-5.9.14.tar.bz2 && \
+    cd strongswan-5.9.14 && \
+    ./configure --prefix=/usr/local/strongswan \
+                --sysconfdir=/etc \
+                --enable-openssl \
+                --enable-pki \
+                --enable-swanctl \
+                --enable-systemd \
+                --enable-vici \
+                --enable-python-eggs \
+                --enable-python-eggs-install \
+                --disable-gmp \
+                --disable-ldap \
+                --disable-mysql \
+                --disable-sqlite \
+                --with-lib-prefix=/usr/local \
+                --with-openssl-lib=/usr/local/oqs-openssl/lib \
+                --with-openssl-include=/usr/local/oqs-openssl/include && \
+    make -j$(nproc) && make install
+
+# Configure library paths
+RUN echo "/usr/local/lib" > /etc/ld.so.conf.d/oqs.conf && \
+    echo "/usr/local/oqs-openssl/lib" > /etc/ld.so.conf.d/oqs-openssl.conf && \
+    echo "/usr/local/strongswan/lib" > /etc/ld.so.conf.d/strongswan.conf && \
+    ldconfig
+
+# Add binaries to PATH
+ENV PATH="/usr/local/strongswan/bin:/usr/local/strongswan/sbin:/usr/local/oqs-openssl/bin:${PATH}"
+
+# Set up working directories
+RUN mkdir -p /etc/ipsec.d/{private,certs,cacerts,crls} \
+             /var/log/strongswan \
+             /var/run/strongswan \
+             /opt/pqc-client/{data,logs,certs} \
+             /etc/supervisor/conf.d
+
+# Copy client scripts and tools
+COPY docker/scripts/init-pqc-spoke.sh /opt/init-pqc-spoke.sh
+COPY tools/pqc-client-monitor.py /opt/pqc-client/tools/
+COPY docker/config/supervisor-spoke.conf /etc/supervisor/conf.d/pqc-spoke.conf
+
+# Set permissions
+RUN chmod +x /opt/init-pqc-spoke.sh && \
+    chmod 700 /etc/ipsec.d/private && \
+    chmod 755 /etc/ipsec.d/{certs,cacerts,crls}
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD /usr/local/strongswan/sbin/ipsec status || exit 1
+
+# Initialize and start client
+CMD ["/opt/init-pqc-spoke.sh"]
