@@ -1,0 +1,201 @@
+# PQC-VPN Hub Docker Image
+# Based on Ubuntu 22.04 with strongSwan and PQC support
+
+FROM ubuntu:22.04
+
+LABEL maintainer="PQC-VPN Team"
+LABEL description="Post-Quantum Cryptography VPN Hub with strongSwan"
+LABEL version="1.0"
+
+# Set environment variables
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=UTC
+
+# Install dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    libssl-dev \
+    libgmp-dev \
+    libtspi-dev \
+    libldap2-dev \
+    libcurl4-openssl-dev \
+    libxml2-dev \
+    libsystemd-dev \
+    libpcsclite-dev \
+    pkg-config \
+    gettext \
+    flex \
+    bison \
+    autoconf \
+    automake \
+    libtool \
+    git \
+    wget \
+    curl \
+    python3 \
+    python3-pip \
+    cmake \
+    ninja-build \
+    iptables \
+    iproute2 \
+    iputils-ping \
+    net-tools \
+    supervisor \
+    openssl \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create directories
+RUN mkdir -p /opt/pqc-vpn/{certs,scripts,tools,logs} \
+    /etc/ipsec.d/{cacerts,certs,private} \
+    /var/log/pqc-vpn
+
+# Install liboqs for PQC support
+WORKDIR /tmp
+RUN git clone --depth 1 --branch main https://github.com/open-quantum-safe/liboqs.git && \
+    cd liboqs && \
+    mkdir build && cd build && \
+    cmake -G Ninja -DCMAKE_INSTALL_PREFIX=/usr/local \
+          -DOQS_BUILD_ONLY_LIB=ON \
+          -DOQS_MINIMAL_BUILD="KEM_kyber_512;KEM_kyber_768;KEM_kyber_1024;SIG_dilithium_2;SIG_dilithium_3;SIG_dilithium_5" \
+          .. && \
+    ninja && \
+    ninja install && \
+    ldconfig && \
+    cd / && rm -rf /tmp/liboqs
+
+# Install strongSwan with PQC support
+WORKDIR /tmp
+RUN git clone https://github.com/strongswan/strongswan.git && \
+    cd strongswan && \
+    git checkout 5.9.14 && \
+    ./autogen.sh && \
+    ./configure --prefix=/usr \
+                --sysconfdir=/etc \
+                --localstatedir=/var \
+                --libexecdir=/usr/lib \
+                --enable-openssl \
+                --enable-python-eggs \
+                --enable-cmd \
+                --enable-conf \
+                --enable-connmark \
+                --enable-dhcp \
+                --enable-eap-aka \
+                --enable-eap-gtc \
+                --enable-eap-identity \
+                --enable-eap-md5 \
+                --enable-eap-mschapv2 \
+                --enable-eap-radius \
+                --enable-eap-tls \
+                --enable-farp \
+                --enable-files \
+                --enable-gcrypt \
+                --enable-gmp \
+                --enable-ldap \
+                --enable-mysql \
+                --enable-sqlite \
+                --enable-stroke \
+                --enable-updown \
+                --enable-unity \
+                --enable-xauth-eap \
+                --enable-xauth-pam \
+                --enable-chapoly \
+                --enable-curl \
+                --enable-systemd \
+                --disable-des \
+                --enable-oqs \
+                --with-ipseclibdir=/usr/lib/ipsec && \
+    make -j$(nproc) && \
+    make install && \
+    cd / && rm -rf /tmp/strongswan
+
+# Copy configuration files
+COPY configs/hub/ /etc/
+COPY scripts/ /opt/pqc-vpn/scripts/
+COPY tools/ /opt/pqc-vpn/tools/
+
+# Set executable permissions
+RUN chmod +x /opt/pqc-vpn/scripts/*.sh && \
+    chmod +x /opt/pqc-vpn/tools/*.py
+
+# Create supervisor configuration
+RUN cat > /etc/supervisor/conf.d/strongswan.conf << 'EOF'
+[program:strongswan]
+command=/usr/sbin/ipsec start --nofork
+autostart=true
+autorestart=true
+stderr_logfile=/var/log/pqc-vpn/strongswan.err.log
+stdout_logfile=/var/log/pqc-vpn/strongswan.out.log
+user=root
+priority=100
+
+[program:monitor]
+command=/opt/pqc-vpn/scripts/monitor-vpn.sh dashboard --refresh 10
+autostart=false
+autorestart=true
+stderr_logfile=/var/log/pqc-vpn/monitor.err.log
+stdout_logfile=/var/log/pqc-vpn/monitor.out.log
+user=root
+priority=200
+EOF
+
+# Create entrypoint script
+RUN cat > /docker-entrypoint.sh << 'EOF'
+#!/bin/bash
+set -e
+
+echo "Starting PQC-VPN Hub..."
+
+# Set default hub IP if not provided
+HUB_IP=${HUB_IP:-$(hostname -i)}
+echo "Hub IP: $HUB_IP"
+
+# Generate certificates if they don't exist
+if [[ ! -f /opt/pqc-vpn/certs/ca/ca-cert.pem ]]; then
+    echo "Generating PQC certificates..."
+    /opt/pqc-vpn/scripts/generate-pqc-certs.sh --ca
+    /opt/pqc-vpn/scripts/generate-pqc-certs.sh --hub "$HUB_IP"
+fi
+
+# Update configuration with actual IP
+sed -i "s/%HUB_IP%/$HUB_IP/g" /etc/ipsec.conf
+
+# Copy certificates to strongSwan directory
+cp /opt/pqc-vpn/certs/ca/ca-cert.pem /etc/ipsec.d/cacerts/
+cp /opt/pqc-vpn/certs/hub/hub-cert.pem /etc/ipsec.d/certs/
+cp /opt/pqc-vpn/certs/hub/hub-key.pem /etc/ipsec.d/private/
+
+# Set proper permissions
+chmod 644 /etc/ipsec.d/cacerts/*
+chmod 644 /etc/ipsec.d/certs/*
+chmod 600 /etc/ipsec.d/private/*
+
+# Configure iptables for VPN
+iptables -t nat -A POSTROUTING -s 10.10.0.0/16 -o eth0 -j MASQUERADE
+iptables -A FORWARD -s 10.10.0.0/16 -j ACCEPT
+iptables -A FORWARD -d 10.10.0.0/16 -j ACCEPT
+
+# Enable IP forwarding
+echo 1 > /proc/sys/net/ipv4/ip_forward
+
+echo "Starting supervisor..."
+exec /usr/bin/supervisord -c /etc/supervisor/supervisord.conf
+EOF
+
+RUN chmod +x /docker-entrypoint.sh
+
+# Expose ports
+EXPOSE 500/udp 4500/udp 8443
+
+# Set volumes
+VOLUME ["/opt/pqc-vpn/certs", "/opt/pqc-vpn/logs", "/etc/ipsec.d"]
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD ipsec status || exit 1
+
+# Set working directory
+WORKDIR /opt/pqc-vpn
+
+# Entrypoint
+ENTRYPOINT ["/docker-entrypoint.sh"]
