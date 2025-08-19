@@ -1,0 +1,131 @@
+# PQC-VPN Hub with Real Post-Quantum Cryptography
+FROM ubuntu:22.04
+
+# Prevent interactive prompts
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TERM=xterm
+
+# Install base dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    cmake \
+    git \
+    wget \
+    curl \
+    pkg-config \
+    libssl-dev \
+    python3 \
+    python3-pip \
+    python3-venv \
+    ninja-build \
+    unzip \
+    net-tools \
+    iproute2 \
+    iptables \
+    iputils-ping \
+    tcpdump \
+    supervisor \
+    nginx \
+    redis-server \
+    sqlite3 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies
+COPY requirements.txt /tmp/
+RUN pip3 install -r /tmp/requirements.txt
+
+# Build and install liboqs (Open Quantum Safe library)
+WORKDIR /opt
+RUN git clone --depth 1 --branch main https://github.com/open-quantum-safe/liboqs.git && \
+    cd liboqs && \
+    mkdir build && cd build && \
+    cmake -GNinja -DCMAKE_INSTALL_PREFIX=/usr/local \
+                  -DOQS_BUILD_ONLY_LIB=ON \
+                  -DOQS_MINIMAL_BUILD="KEM_kyber_512;KEM_kyber_768;KEM_kyber_1024;SIG_dilithium_2;SIG_dilithium_3;SIG_dilithium_5;SIG_falcon_512;SIG_falcon_1024" \
+                  .. && \
+    ninja && ninja install && \
+    ldconfig
+
+# Build and install OpenSSL with OQS provider
+RUN git clone --depth 1 --branch OQS-OpenSSL_1_1_1-stable https://github.com/open-quantum-safe/openssl.git oqs-openssl && \
+    cd oqs-openssl && \
+    ./Configure linux-x86_64 \
+                --prefix=/usr/local/oqs-openssl \
+                --openssldir=/usr/local/oqs-openssl/ssl \
+                -Wl,-rpath,/usr/local/oqs-openssl/lib && \
+    make -j$(nproc) && make install
+
+# Build OQS-OpenSSL provider for OpenSSL 3.x
+RUN git clone --depth 1 --branch main https://github.com/open-quantum-safe/oqs-provider.git && \
+    cd oqs-provider && \
+    cmake -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_PREFIX_PATH=/usr/local \
+          -DCMAKE_INSTALL_PREFIX=/usr/local \
+          -S . -B _build && \
+    cmake --build _build && cmake --install _build
+
+# Build strongSwan with PQC support
+RUN wget https://download.strongswan.org/strongswan-5.9.14.tar.bz2 && \
+    tar xjf strongswan-5.9.14.tar.bz2 && \
+    cd strongswan-5.9.14 && \
+    ./configure --prefix=/usr/local/strongswan \
+                --sysconfdir=/etc \
+                --enable-openssl \
+                --enable-pki \
+                --enable-swanctl \
+                --enable-systemd \
+                --enable-vici \
+                --enable-python-eggs \
+                --enable-python-eggs-install \
+                --with-lib-prefix=/usr/local \
+                --with-openssl-lib=/usr/local/oqs-openssl/lib \
+                --with-openssl-include=/usr/local/oqs-openssl/include && \
+    make -j$(nproc) && make install
+
+# Configure library paths
+RUN echo "/usr/local/lib" > /etc/ld.so.conf.d/oqs.conf && \
+    echo "/usr/local/oqs-openssl/lib" > /etc/ld.so.conf.d/oqs-openssl.conf && \
+    echo "/usr/local/strongswan/lib" > /etc/ld.so.conf.d/strongswan.conf && \
+    ldconfig
+
+# Add binaries to PATH
+ENV PATH="/usr/local/strongswan/bin:/usr/local/strongswan/sbin:/usr/local/oqs-openssl/bin:${PATH}"
+
+# Copy PQC-VPN management tools
+COPY tools/ /opt/pqc-vpn/tools/
+COPY scripts/ /opt/pqc-vpn/scripts/
+COPY configs/hub/ /opt/pqc-vpn/configs/
+COPY web/ /opt/pqc-vpn/web/
+
+# Set up working directories
+RUN mkdir -p /etc/ipsec.d/{private,certs,cacerts,crls} \
+             /var/log/strongswan \
+             /var/run/strongswan \
+             /opt/pqc-vpn/{data,logs,certs} \
+             /etc/supervisor/conf.d
+
+# Copy configuration files
+COPY docker/config/strongswan.conf /etc/strongswan.conf
+COPY docker/config/supervisor-hub.conf /etc/supervisor/conf.d/pqc-hub.conf
+COPY docker/config/nginx-hub.conf /etc/nginx/sites-available/pqc-hub
+COPY docker/scripts/init-pqc-hub.sh /opt/init-pqc-hub.sh
+
+# Configure nginx
+RUN rm -f /etc/nginx/sites-enabled/default && \
+    ln -s /etc/nginx/sites-available/pqc-hub /etc/nginx/sites-enabled/ && \
+    mkdir -p /var/log/nginx
+
+# Set permissions
+RUN chmod +x /opt/init-pqc-hub.sh /opt/pqc-vpn/scripts/*.sh && \
+    chmod 700 /etc/ipsec.d/private && \
+    chmod 755 /etc/ipsec.d/{certs,cacerts,crls}
+
+# Expose ports
+EXPOSE 500/udp 4500/udp 8080/tcp 8443/tcp 9090/tcp
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD /usr/local/strongswan/sbin/ipsec status || exit 1
+
+# Initialize and start services
+CMD ["/opt/init-pqc-hub.sh"]
