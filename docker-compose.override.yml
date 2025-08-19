@@ -1,0 +1,121 @@
+# Docker Compose Override for Development/Demo
+# This file fixes common issues with the main docker-compose.production.yml
+# 
+# Usage:
+#   docker-compose -f docker/docker-compose.production.yml -f docker-compose.override.yml up -d
+#
+# OR place this file in project root and just run:
+#   docker-compose up -d
+
+version: '3.8'
+
+services:
+  # PQC-VPN Hub with corrected build context and port mappings
+  pqc-vpn-hub:
+    build:
+      context: .  # Build from project root, not docker directory
+      dockerfile: docker/Dockerfile.pqc-hub
+      args:
+        - VERSION=${VERSION:-1.0.0}
+        - BUILD_TYPE=${BUILD_TYPE:-production}
+    ports:
+      - "${WEB_PORT:-8443}:8443"
+      - "${API_PORT:-9090}:9090"
+      - "${METRICS_PORT:-9100}:9100"
+      - "${VPN_PORT_IKE:-500}:500/udp"
+      - "${VPN_PORT_NATT:-4500}:4500/udp"
+    environment:
+      # Core configuration
+      - HUB_IP=${HUB_IP:-192.168.1.100}
+      - HUB_DOMAIN=${HUB_DOMAIN:-pqc-hub.demo.local}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-ChangeMe123!}
+      - SECRET_KEY=${SECRET_KEY:-change-this-secret-key}
+      
+      # PQC Configuration
+      - PQC_KEM_ALGORITHM=${PQC_KEM_ALGORITHM:-kyber1024}
+      - PQC_SIG_ALGORITHM=${PQC_SIG_ALGORITHM:-dilithium5}
+      
+      # Database connection
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=${POSTGRES_DB:-pqc_vpn_enterprise}
+      - POSTGRES_USER=${POSTGRES_USER:-pqc_admin}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-SecurePostgres123!}
+      
+      # Redis connection
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-SecureRedis123!}
+      
+      # Feature flags
+      - ENTERPRISE_MODE=${ENTERPRISE_MODE:-true}
+      - ENABLE_MONITORING=${ENABLE_MONITORING:-true}
+      - ENABLE_API=${ENABLE_API:-true}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+
+  # PostgreSQL with configurable external port to avoid conflicts
+  postgres:
+    ports:
+      - "${POSTGRES_EXTERNAL_PORT:-15432}:5432"  # Default to port 15432 to avoid conflicts
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-pqc_vpn_enterprise}
+      - POSTGRES_USER=${POSTGRES_USER:-pqc_admin}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-SecurePostgres123!}
+      - POSTGRES_INITDB_ARGS=--auth-host=scram-sha-256
+
+  # Redis with configurable external port to avoid conflicts
+  redis:
+    ports:
+      - "${REDIS_EXTERNAL_PORT:-16379}:6379"  # Default to port 16379 to avoid conflicts
+    command: >
+      redis-server 
+      --requirepass ${REDIS_PASSWORD:-SecureRedis123!}
+      --appendonly yes
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+
+  # Grafana with configurable port
+  grafana:
+    ports:
+      - "${GRAFANA_EXTERNAL_PORT:-13000}:3000"  # Default to port 13000 to avoid conflicts
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-SecureGrafana123!}
+      - GF_SECURITY_SECRET_KEY=${GRAFANA_SECRET_KEY:-grafana-secret-key}
+      - GF_DATABASE_TYPE=postgres
+      - GF_DATABASE_HOST=postgres:5432
+      - GF_DATABASE_NAME=grafana
+      - GF_DATABASE_USER=grafana_user
+      - GF_DATABASE_PASSWORD=${GRAFANA_DB_PASSWORD:-GrafanaDB123!}
+
+  # Prometheus with configurable port
+  prometheus:
+    ports:
+      - "${PROMETHEUS_EXTERNAL_PORT:-19090}:9090"  # Default to port 19090 to avoid conflicts
+
+  # Node Exporter for system metrics
+  node-exporter:
+    ports:
+      - "19100:9100"  # Use non-conflicting port
+
+# Additional networks configuration
+networks:
+  pqc-enterprise-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/16
+          gateway: 172.30.0.1
+
+# Volume configurations for data persistence
+volumes:
+  pqc-vpn-data:
+    driver: local
+  pqc-postgres-data:
+    driver: local
+  pqc-redis-data:
+    driver: local
+  pqc-grafana-data:
+    driver: local
+  pqc-prometheus-data:
+    driver: local
