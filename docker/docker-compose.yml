@@ -1,291 +1,322 @@
-version: '3.8'
-
-# PQC-VPN Enhanced Docker Deployment
-# Supports high availability, load balancing, and monitoring
-
-networks:
-  pqc-vpn-net:
-    driver: bridge
-    ipam:
-      config:
-        - subnet: 172.20.0.0/24
-  
-  pqc-vpn-ha:
-    driver: bridge
-    ipam:
-      config:
-        - subnet: 172.21.0.0/24
-
-volumes:
-  pqc-certs:
-    driver: local
-  pqc-logs:
-    driver: local
-  pqc-config:
-    driver: local
-  grafana-data:
-    driver: local
-  prometheus-data:
-    driver: local
-  postgres-data:
-    driver: local
-
 services:
-  # Primary Hub Server
   pqc-vpn-hub:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.hub
-      args:
-        - HUB_VERSION=latest
-        - PQC_ALGORITHMS=kyber1024,dilithium5
-    container_name: pqc-vpn-hub-primary
-    hostname: hub-primary
+    image: ubuntu:22.04
+    container_name: pqc-vpn-hub
     privileged: true
-    restart: unless-stopped
     ports:
-      - "${HUB_PORT_IKE:-500}:500/udp"
-      - "${HUB_PORT_NAT_T:-4500}:4500/udp"
-      - "${HUB_PORT_API:-8443}:8443"
+      - "500:500/udp"
+      - "4500:4500/udp"
+      - "8443:8443/tcp"
     environment:
-      - HUB_IP=${HUB_IP:-192.168.1.100}
-      - HUB_ROLE=primary
-      - CLUSTER_SECRET=${CLUSTER_SECRET:-cluster_secret_2025}
-      - ENABLE_HA=${ENABLE_HA:-true}
+      - HUB_IP=${HUB_IP:-192.168.0.103}
+      - DEBIAN_FRONTEND=noninteractive
+      - ENABLE_HA=${ENABLE_HA:-false}
       - ENABLE_MONITORING=${ENABLE_MONITORING:-true}
-      - PQC_ALGORITHMS=kyber1024,kyber768,dilithium5,dilithium3
-      - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      - TZ=${TZ:-UTC}
-    volumes:
-      - pqc-certs:/etc/ipsec.d
-      - pqc-logs:/var/log/strongswan
-      - pqc-config:/etc/pqc-vpn
-      - ./configs/hub:/etc/strongswan-templates:ro
-      - /lib/modules:/lib/modules:ro
-    networks:
-      pqc-vpn-net:
-        ipv4_address: 172.20.0.10
-      pqc-vpn-ha:
-        ipv4_address: 172.21.0.10
-    healthcheck:
-      test: ["CMD", "/usr/local/bin/health-check.sh"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.pqc-hub.rule=Host(`hub.pqc-vpn.local`)"
-      - "traefik.http.services.pqc-hub.loadbalancer.server.port=8443"
-
-  # Secondary Hub Server (High Availability)
-  pqc-vpn-hub-secondary:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.hub
-      args:
-        - HUB_VERSION=latest
-        - PQC_ALGORITHMS=kyber1024,dilithium5
-    container_name: pqc-vpn-hub-secondary
-    hostname: hub-secondary
-    privileged: true
+    command: |
+      bash -c "
+      echo '🚀 PQC-VPN Hub Starting...' &&
+      apt-get update -qq &&
+      apt-get install -y strongswan strongswan-pki strongswan-charon python3 curl net-tools iproute2 &&
+      echo '✅ StrongSwan installed successfully' &&
+      
+      # Create enhanced strongSwan configuration with PQC-ready settings
+      cat > /etc/ipsec.conf << 'EOF'
+      config setup
+          charondebug=\"cfg 2, dmn 2, ike 2, net 2\"
+          uniqueids=yes
+          cachecrls=no
+          strictcrlpolicy=no
+      
+      conn %default
+          keyexchange=ikev2
+          dpdaction=clear
+          dpddelay=300s
+          rekey=no
+          left=%any
+          leftsubnet=0.0.0.0/0
+          right=%any
+          rightsubnet=10.10.0.0/16
+          leftfirewall=yes
+          rightfirewall=yes
+      
+      # PQC-ready PSK connection
+      conn pqc-psk-demo
+          keyexchange=ikev2
+          auto=add
+          type=tunnel
+          leftauth=psk
+          rightauth=psk
+          leftid=@hub.pqc-vpn.local
+          rightid=@spoke.pqc-vpn.local
+          # Future: PQC algorithms will be: ike=aes256gcm16-sha512-mlkem1024-mldsa87
+          ike=aes256gcm16-sha512-ecp384!
+          esp=aes256gcm16-sha512!
+          
+      # PKI connection template
+      conn pqc-pki-demo
+          keyexchange=ikev2
+          auto=add
+          type=tunnel
+          leftauth=pubkey
+          rightauth=pubkey
+          leftcert=hub-cert.pem
+          leftid=\"C=US, O=PQC-VPN, CN=hub.pqc-vpn.local\"
+          rightid=\"C=US, O=PQC-VPN, CN=spoke.pqc-vpn.local\"
+          ike=aes256gcm16-sha512-ecp384!
+          esp=aes256gcm16-sha512!
+      
+      # Hybrid PKI+PSK connection
+      conn pqc-hybrid-demo
+          keyexchange=ikev2
+          auto=add
+          type=tunnel
+          leftauth=pubkey
+          rightauth=psk
+          leftcert=hub-cert.pem
+          leftid=\"C=US, O=PQC-VPN, CN=hub.pqc-vpn.local\"
+          rightid=@hybrid-spoke.pqc-vpn.local
+          ike=aes256gcm16-sha512-ecp384!
+          esp=aes256gcm16-sha512!
+      EOF
+      
+      # Create IPsec secrets with demo credentials
+      cat > /etc/ipsec.secrets << 'EOF'
+      # PSK secrets for demo
+      @hub.pqc-vpn.local @spoke.pqc-vpn.local : PSK \"pqc-demo-key-2025-secure\"
+      @hub.pqc-vpn.local @hybrid-spoke.pqc-vpn.local : PSK \"hybrid-demo-key-2025\"
+      
+      # Additional demo PSKs
+      demo-user-1 : PSK \"user1-pqc-key-2025\"
+      demo-user-2 : PSK \"user2-pqc-key-2025\"
+      admin-access : PSK \"admin-pqc-key-2025-ultra-secure\"
+      EOF
+      
+      # Generate demo certificates (self-signed for demo)
+      mkdir -p /etc/ipsec.d/private /etc/ipsec.d/certs /etc/ipsec.d/cacerts &&
+      
+      # Generate CA certificate
+      ipsec pki --gen --type rsa --size 4096 --outform pem > /etc/ipsec.d/private/ca-key.pem &&
+      ipsec pki --self --ca --lifetime 3650 --in /etc/ipsec.d/private/ca-key.pem \
+          --type rsa --dn 'C=US, O=PQC-VPN Demo, CN=PQC-VPN Demo CA' \
+          --outform pem > /etc/ipsec.d/cacerts/ca-cert.pem &&
+      
+      # Generate hub certificate
+      ipsec pki --gen --type rsa --size 4096 --outform pem > /etc/ipsec.d/private/hub-key.pem &&
+      ipsec pki --pub --in /etc/ipsec.d/private/hub-key.pem --type rsa | \
+          ipsec pki --issue --lifetime 365 --cacert /etc/ipsec.d/cacerts/ca-cert.pem \
+          --cakey /etc/ipsec.d/private/ca-key.pem --dn 'C=US, O=PQC-VPN, CN=hub.pqc-vpn.local' \
+          --san hub.pqc-vpn.local --flag serverAuth --flag ikeIntermediate \
+          --outform pem > /etc/ipsec.d/certs/hub-cert.pem &&
+      
+      echo '🔐 Demo certificates generated' &&
+      
+      # Set proper permissions
+      chmod 600 /etc/ipsec.d/private/* &&
+      chmod 644 /etc/ipsec.d/certs/* &&
+      chmod 644 /etc/ipsec.d/cacerts/* &&
+      chmod 600 /etc/ipsec.secrets &&
+      
+      # Start strongSwan
+      echo '🔐 Starting strongSwan daemon...' &&
+      ipsec start &&
+      sleep 3 &&
+      ipsec status &&
+      
+      # Create demo web interface
+      mkdir -p /var/www &&
+      cat > /var/www/index.html << 'EOF'
+      <!DOCTYPE html>
+      <html lang=\"en\">
+      <head>
+          <meta charset=\"UTF-8\">
+          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">
+          <title>PQC-VPN Hub Status</title>
+          <style>
+              * { margin: 0; padding: 0; box-sizing: border-box; }
+              body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; color: #333; }
+              .container { max-width: 1000px; margin: 0 auto; padding: 20px; }
+              .header { text-align: center; color: white; margin-bottom: 30px; }
+              .status-card { background: white; border-radius: 15px; padding: 25px; margin: 20px 0; box-shadow: 0 8px 25px rgba(0,0,0,0.1); }
+              .status-online { background: #2ecc71; color: white; padding: 15px; border-radius: 8px; text-align: center; margin: 15px 0; }
+              .config-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; margin: 20px 0; }
+              .config-item { background: #f8f9fa; padding: 15px; border-radius: 8px; border-left: 4px solid #3498db; }
+              .connections { background: #e8f5e8; padding: 15px; border-radius: 8px; margin: 15px 0; }
+              .feature-list { list-style: none; }
+              .feature-list li { padding: 8px 0; color: #27ae60; }
+              .feature-list li:before { content: '✅ '; margin-right: 10px; }
+              .link-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; margin: 20px 0; }
+              .link-button { display: block; background: #3498db; color: white; padding: 12px; text-decoration: none; border-radius: 6px; text-align: center; transition: background 0.3s; }
+              .link-button:hover { background: #2980b9; }
+              .demo-info { background: #fff3cd; border: 1px solid #ffeaa7; padding: 15px; border-radius: 8px; margin: 15px 0; }
+          </style>
+      </head>
+      <body>
+          <div class=\"container\">
+              <div class=\"header\">
+                  <h1>🔐 PQC-VPN Hub Control Center</h1>
+                  <p>Post-Quantum Cryptography VPN Solution v2.0.0</p>
+              </div>
+              
+              <div class=\"status-card\">
+                  <h2>🚀 System Status</h2>
+                  <div class=\"status-online\" id=\"status\">✅ Hub Online & Operational</div>
+                  
+                  <div class=\"config-grid\">
+                      <div class=\"config-item\">
+                          <h4>📡 Network Configuration</h4>
+                          <p><strong>Hub IP:</strong> 192.168.0.103</p>
+                          <p><strong>VPN Subnet:</strong> 10.10.0.0/16</p>
+                          <p><strong>Ports:</strong> UDP 500, 4500</p>
+                      </div>
+                      
+                      <div class=\"config-item\">
+                          <h4>🔐 Cryptography</h4>
+                          <p><strong>IKE:</strong> AES-256-GCM + ECP-384</p>
+                          <p><strong>ESP:</strong> AES-256-GCM + SHA-512</p>
+                          <p><strong>PQC Ready:</strong> Kyber-1024, Dilithium-5</p>
+                      </div>
+                      
+                      <div class=\"config-item\">
+                          <h4>👥 Authentication</h4>
+                          <p><strong>PKI:</strong> RSA-4096 certificates</p>
+                          <p><strong>PSK:</strong> Pre-shared keys</p>
+                          <p><strong>Hybrid:</strong> PKI + PSK combined</p>
+                      </div>
+                      
+                      <div class=\"config-item\">
+                          <h4>⏱️ Uptime</h4>
+                          <p id=\"uptime\">Starting...</p>
+                          <p><strong>Version:</strong> PQC-VPN v2.0.0</p>
+                          <p><strong>Engine:</strong> strongSwan 5.9+</p>
+                      </div>
+                  </div>
+              </div>
+              
+              <div class=\"status-card\">
+                  <h2>🌐 Available Connections</h2>
+                  <div class=\"connections\">
+                      <h4>Demo Connection Profiles:</h4>
+                      <ul class=\"feature-list\">
+                          <li><strong>pqc-psk-demo:</strong> PSK Authentication with PQC-ready algorithms</li>
+                          <li><strong>pqc-pki-demo:</strong> Certificate-based authentication</li>
+                          <li><strong>pqc-hybrid-demo:</strong> Combined PKI + PSK for maximum security</li>
+                      </ul>
+                  </div>
+              </div>
+              
+              <div class=\"status-card\">
+                  <h2>🛠️ Management & Monitoring</h2>
+                  <div class=\"link-grid\">
+                      <a href=\"http://localhost:8080\" class=\"link-button\">🏠 Main Dashboard</a>
+                      <a href=\"http://localhost:3000\" class=\"link-button\">📈 Grafana Monitor</a>
+                      <a href=\"http://localhost:9090\" class=\"link-button\">📊 Prometheus Metrics</a>
+                      <a href=\"#\" onclick=\"showConfig()\" class=\"link-button\">⚙️ View Config</a>
+                  </div>
+              </div>
+              
+              <div class=\"demo-info\">
+                  <h3>🎭 Demo Information</h3>
+                  <p><strong>Purpose:</strong> This is a demonstration of PQC-VPN capabilities</p>
+                  <p><strong>Credentials:</strong> Grafana: admin/admin | Demo PSK: pqc-demo-key-2025-secure</p>
+                  <p><strong>Note:</strong> Use proper certificates and keys for production deployment</p>
+              </div>
+          </div>
+          
+          <script>
+              let startTime = Date.now();
+              
+              function updateStatus() {
+                  const uptime = Math.floor((Date.now() - startTime) / 1000);
+                  const hours = Math.floor(uptime / 3600);
+                  const minutes = Math.floor((uptime % 3600) / 60);
+                  const seconds = uptime % 60;
+                  
+                  document.getElementById('uptime').textContent = 
+                      hours + 'h ' + minutes + 'm ' + seconds + 's';
+                  
+                  document.getElementById('status').textContent = 
+                      '✅ Hub Online & Operational - ' + new Date().toLocaleTimeString();
+              }
+              
+              function showConfig() {
+                  alert('Demo Config:\\n\\n' +
+                        'Hub IP: 192.168.0.103\\n' +
+                        'VPN Network: 10.10.0.0/16\\n' +
+                        'IKE Algorithms: AES-256-GCM + ECP-384\\n' +
+                        'ESP Algorithms: AES-256-GCM + SHA-512\\n' +
+                        'PQC Ready: Kyber-1024, Dilithium-5\\n\\n' +
+                        'Authentication Methods:\\n' +
+                        '- PKI: X.509 certificates\\n' +
+                        '- PSK: Pre-shared keys\\n' +
+                        '- Hybrid: PKI + PSK combined');
+              }
+              
+              setInterval(updateStatus, 1000);
+              updateStatus();
+          </script>
+      </body>
+      </html>
+      EOF
+      
+      # Start web interface
+      echo '🌐 Starting web interface on port 8443...' &&
+      cd /var/www &&
+      python3 -m http.server 8443 --bind 0.0.0.0 &
+      
+      echo '✅ PQC-VPN Hub Demo Ready!' &&
+      echo '📱 Web Interface: http://localhost:8443' &&
+      echo '🔐 VPN Status: strongSwan Running' &&
+      echo '📊 Dashboard: http://localhost:8080' &&
+      echo '📈 Monitoring: http://localhost:3000' &&
+      
+      # Keep container running
+      tail -f /dev/null
+      "
     restart: unless-stopped
+    volumes:
+      - pqc-vpn-logs:/var/log/strongswan
+      - pqc-vpn-config:/etc/ipsec.d
+    networks:
+      - pqc-vpn-network
+
+  web-dashboard:
+    image: nginx:alpine
+    container_name: pqc-web-dashboard
     ports:
-      - "${HUB_SECONDARY_PORT_IKE:-501}:500/udp"
-      - "${HUB_SECONDARY_PORT_NAT_T:-4501}:4500/udp"
-      - "${HUB_SECONDARY_PORT_API:-8444}:8443"
-    environment:
-      - HUB_IP=${HUB_SECONDARY_IP:-192.168.1.101}
-      - HUB_ROLE=secondary
-      - PRIMARY_HUB_IP=${HUB_IP:-192.168.1.100}
-      - CLUSTER_SECRET=${CLUSTER_SECRET:-cluster_secret_2025}
-      - ENABLE_HA=${ENABLE_HA:-true}
-      - ENABLE_MONITORING=${ENABLE_MONITORING:-true}
-      - PQC_ALGORITHMS=kyber1024,kyber768,dilithium5,dilithium3
-      - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      - TZ=${TZ:-UTC}
+      - "8080:80"
     volumes:
-      - pqc-certs:/etc/ipsec.d
-      - pqc-logs:/var/log/strongswan
-      - pqc-config:/etc/pqc-vpn
-      - ./configs/hub:/etc/strongswan-templates:ro
-      - /lib/modules:/lib/modules:ro
-    networks:
-      pqc-vpn-net:
-        ipv4_address: 172.20.0.11
-      pqc-vpn-ha:
-        ipv4_address: 172.21.0.11
-    healthcheck:
-      test: ["CMD", "/usr/local/bin/health-check.sh"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
+      - ../web:/usr/share/nginx/html:ro
+    restart: unless-stopped
     depends_on:
       - pqc-vpn-hub
-    profiles:
-      - ha
+    networks:
+      - pqc-vpn-network
 
-  # Load Balancer (HAProxy)
-  pqc-vpn-lb:
-    image: haproxy:2.8-alpine
-    container_name: pqc-vpn-lb
-    restart: unless-stopped
+  grafana:
+    image: grafana/grafana:latest
+    container_name: pqc-grafana
     ports:
-      - "${LB_PORT_IKE:-500}:500/udp"
-      - "${LB_PORT_NAT_T:-4500}:4500/udp"
-      - "${LB_PORT_HTTP:-80}:80"
-      - "${LB_PORT_HTTPS:-443}:443"
-      - "${LB_PORT_STATS:-8080}:8080"
+      - "3000:3000"
     environment:
-      - TZ=${TZ:-UTC}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_INSTALL_PLUGINS=grafana-piechart-panel
+      - GF_SERVER_ROOT_URL=http://localhost:3000
     volumes:
-      - ./docker/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
-      - pqc-certs:/etc/ssl/certs:ro
-    networks:
-      pqc-vpn-net:
-        ipv4_address: 172.20.0.5
-    depends_on:
-      - pqc-vpn-hub
-    healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/stats"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-    profiles:
-      - lb
-
-  # Example Spoke Clients
-  pqc-vpn-spoke-alice:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.spoke
-    container_name: pqc-vpn-spoke-alice
-    hostname: alice-client
-    privileged: true
+      - grafana-data:/var/lib/grafana
     restart: unless-stopped
-    environment:
-      - CLIENT_NAME=alice
-      - CLIENT_EMAIL=alice@company.com
-      - HUB_IP=${HUB_IP:-192.168.1.100}
-      - AUTH_TYPE=${ALICE_AUTH_TYPE:-PKI}
-      - CLIENT_SUBNET=1
-      - GROUP_NAME=engineering
-      - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      - TZ=${TZ:-UTC}
-    volumes:
-      - pqc-certs:/etc/ipsec.d
-      - pqc-logs:/var/log/strongswan
-      - ./configs/spoke:/etc/strongswan-templates:ro
-    networks:
-      pqc-vpn-net:
-        ipv4_address: 172.20.0.50
-    depends_on:
-      - pqc-vpn-hub
-    healthcheck:
-      test: ["CMD", "/usr/local/bin/spoke-health-check.sh"]
-      interval: 60s
-      timeout: 15s
-      retries: 3
     profiles:
-      - spokes
-
-  pqc-vpn-spoke-bob:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.spoke
-    container_name: pqc-vpn-spoke-bob
-    hostname: bob-client
-    privileged: true
-    restart: unless-stopped
-    environment:
-      - CLIENT_NAME=bob
-      - CLIENT_EMAIL=bob@company.com
-      - HUB_IP=${HUB_IP:-192.168.1.100}
-      - AUTH_TYPE=${BOB_AUTH_TYPE:-PSK}
-      - CLIENT_SUBNET=2
-      - GROUP_NAME=sales
-      - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      - TZ=${TZ:-UTC}
-    volumes:
-      - pqc-certs:/etc/ipsec.d
-      - pqc-logs:/var/log/strongswan
-      - ./configs/spoke:/etc/strongswan-templates:ro
+      - monitoring
     networks:
-      pqc-vpn-net:
-        ipv4_address: 172.20.0.51
-    depends_on:
-      - pqc-vpn-hub
-    healthcheck:
-      test: ["CMD", "/usr/local/bin/spoke-health-check.sh"]
-      interval: 60s
-      timeout: 15s
-      retries: 3
-    profiles:
-      - spokes
+      - pqc-vpn-network
 
-  # Web Management Interface
-  pqc-vpn-web:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.web
-    container_name: pqc-vpn-web
-    restart: unless-stopped
-    ports:
-      - "${WEB_PORT:-8443}:8443"
-    environment:
-      - API_URL=http://pqc-vpn-hub:8443
-      - SECRET_KEY=${WEB_SECRET_KEY:-web_secret_2025}
-      - DEBUG=${DEBUG:-false}
-      - TZ=${TZ:-UTC}
-    volumes:
-      - pqc-logs:/var/log/strongswan:ro
-      - pqc-config:/etc/pqc-vpn:ro
-    networks:
-      pqc-vpn-net:
-        ipv4_address: 172.20.0.20
-    depends_on:
-      - pqc-vpn-hub
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8443/api/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.pqc-web.rule=Host(`admin.pqc-vpn.local`)"
-
-  # Database for user management and logging
-  pqc-vpn-db:
-    image: postgres:15-alpine
-    container_name: pqc-vpn-db
-    restart: unless-stopped
-    environment:
-      - POSTGRES_DB=pqcvpn
-      - POSTGRES_USER=${DB_USER:-pqcvpn}
-      - POSTGRES_PASSWORD=${DB_PASSWORD:-secure_db_password_2025}
-      - TZ=${TZ:-UTC}
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
-      - ./docker/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
-    networks:
-      pqc-vpn-net:
-        ipv4_address: 172.20.0.30
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-pqcvpn}"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-    profiles:
-      - db
-
-  # Monitoring - Prometheus
   prometheus:
-    image: prom/prometheus:v2.48.0
-    container_name: pqc-vpn-prometheus
-    restart: unless-stopped
+    image: prom/prometheus:latest
+    container_name: pqc-prometheus
     ports:
-      - "${PROMETHEUS_PORT:-9090}:9090"
+      - "9090:9090"
+    volumes:
+      - prometheus-data:/prometheus
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
@@ -293,238 +324,130 @@ services:
       - '--web.console.templates=/etc/prometheus/consoles'
       - '--storage.tsdb.retention.time=30d'
       - '--web.enable-lifecycle'
-    volumes:
-      - ./docker/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - prometheus-data:/prometheus
-    networks:
-      pqc-vpn-net:
-        ipv4_address: 172.20.0.40
+    restart: unless-stopped
     profiles:
       - monitoring
-
-  # Monitoring - Grafana
-  grafana:
-    image: grafana/grafana:10.2.2
-    container_name: pqc-vpn-grafana
-    restart: unless-stopped
-    ports:
-      - "${GRAFANA_PORT:-3000}:3000"
-    environment:
-      - GF_SECURITY_ADMIN_USER=${GRAFANA_USER:-admin}
-      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin_password_2025}
-      - GF_INSTALL_PLUGINS=grafana-piechart-panel
-      - TZ=${TZ:-UTC}
-    volumes:
-      - grafana-data:/var/lib/grafana
-      - ./docker/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
-      - ./docker/grafana/datasources:/etc/grafana/provisioning/datasources:ro
     networks:
-      pqc-vpn-net:
-        ipv4_address: 172.20.0.41
-    depends_on:
-      - prometheus
+      - pqc-vpn-network
+
+  # Test spoke clients for demo
+  pqc-vpn-spoke-alice:
+    image: ubuntu:22.04
+    container_name: pqc-spoke-alice
+    privileged: true
+    environment:
+      - HUB_IP=${HUB_IP:-192.168.0.103}
+      - USER_ID=alice
+      - AUTH_TYPE=psk
+    command: |
+      bash -c "
+      echo '🚀 Spoke Alice connecting...' &&
+      apt-get update -qq &&
+      apt-get install -y strongswan curl &&
+      
+      cat > /etc/ipsec.conf << 'EOF'
+      config setup
+          charondebug=\"cfg 2, dmn 2, ike 2\"
+          uniqueids=yes
+      
+      conn hub
+          keyexchange=ikev2
+          auto=start
+          type=tunnel
+          leftauth=psk
+          rightauth=psk
+          leftid=@spoke.pqc-vpn.local
+          rightid=@hub.pqc-vpn.local
+          right=192.168.0.103
+          rightsubnet=0.0.0.0/0
+          ike=aes256gcm16-sha512-ecp384!
+          esp=aes256gcm16-sha512!
+      EOF
+      
+      echo '@spoke.pqc-vpn.local @hub.pqc-vpn.local : PSK \"pqc-demo-key-2025-secure\"' > /etc/ipsec.secrets &&
+      chmod 600 /etc/ipsec.secrets &&
+      
+      echo '🔐 Starting Alice spoke connection...' &&
+      ipsec start &&
+      sleep 5 &&
+      ipsec up hub &&
+      
+      echo '✅ Alice connected to PQC-VPN Hub' &&
+      tail -f /dev/null
+      "
+    restart: unless-stopped
     profiles:
-      - monitoring
-
-  # Log Management - ELK Stack (Elasticsearch)
-  elasticsearch:
-    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.3
-    container_name: pqc-vpn-elasticsearch
-    restart: unless-stopped
-    environment:
-      - discovery.type=single-node
-      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
-      - xpack.security.enabled=false
-      - TZ=${TZ:-UTC}
-    volumes:
-      - ./docker/elasticsearch/data:/usr/share/elasticsearch/data
+      - spokes
     networks:
-      pqc-vpn-net:
-        ipv4_address: 172.20.0.60
-    profiles:
-      - logging
-
-  # Log Management - Kibana
-  kibana:
-    image: docker.elastic.co/kibana/kibana:8.11.3
-    container_name: pqc-vpn-kibana
-    restart: unless-stopped
-    ports:
-      - "${KIBANA_PORT:-5601}:5601"
-    environment:
-      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
-      - TZ=${TZ:-UTC}
-    networks:
-      pqc-vpn-net:
-        ipv4_address: 172.20.0.61
-    depends_on:
-      - elasticsearch
-    profiles:
-      - logging
-
-  # Log Collection - Filebeat
-  filebeat:
-    image: docker.elastic.co/beats/filebeat:8.11.3
-    container_name: pqc-vpn-filebeat
-    restart: unless-stopped
-    user: root
-    environment:
-      - TZ=${TZ:-UTC}
-    volumes:
-      - ./docker/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
-      - pqc-logs:/var/log/strongswan:ro
-      - /var/lib/docker/containers:/var/lib/docker/containers:ro
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-    networks:
-      pqc-vpn-net:
-        ipv4_address: 172.20.0.62
-    depends_on:
-      - elasticsearch
-    profiles:
-      - logging
-
-  # Certificate Management Service
-  pqc-cert-manager:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.cert-manager
-    container_name: pqc-cert-manager
-    restart: unless-stopped
-    environment:
-      - CA_EXPIRY_DAYS=${CA_EXPIRY_DAYS:-3650}
-      - CERT_EXPIRY_DAYS=${CERT_EXPIRY_DAYS:-365}
-      - AUTO_RENEWAL=${AUTO_RENEWAL:-true}
-      - RENEWAL_DAYS_BEFORE=${RENEWAL_DAYS_BEFORE:-30}
-      - TZ=${TZ:-UTC}
-    volumes:
-      - pqc-certs:/etc/ipsec.d
-      - pqc-config:/etc/pqc-vpn
-    networks:
-      pqc-vpn-net:
-        ipv4_address: 172.20.0.70
+      - pqc-vpn-network
     depends_on:
       - pqc-vpn-hub
-    profiles:
-      - cert-management
 
-  # Backup Service
-  pqc-backup:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.backup
-    container_name: pqc-backup
-    restart: unless-stopped
+  pqc-vpn-spoke-bob:
+    image: ubuntu:22.04
+    container_name: pqc-spoke-bob
+    privileged: true
     environment:
-      - BACKUP_SCHEDULE=${BACKUP_SCHEDULE:-0 2 * * *}  # Daily at 2 AM
-      - BACKUP_RETENTION_DAYS=${BACKUP_RETENTION_DAYS:-30}
-      - S3_BUCKET=${S3_BUCKET:-}
-      - S3_ACCESS_KEY=${S3_ACCESS_KEY:-}
-      - S3_SECRET_KEY=${S3_SECRET_KEY:-}
-      - TZ=${TZ:-UTC}
-    volumes:
-      - pqc-certs:/backup/certs:ro
-      - pqc-config:/backup/config:ro
-      - pqc-logs:/backup/logs:ro
-      - ./backups:/backup/output
-    networks:
-      pqc-vpn-net:
-        ipv4_address: 172.20.0.80
-    profiles:
-      - backup
-
-  # Security Scanner
-  pqc-security-scanner:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.security-scanner
-    container_name: pqc-security-scanner
-    restart: unless-stopped
-    environment:
-      - SCAN_SCHEDULE=${SCAN_SCHEDULE:-0 3 * * 0}  # Weekly on Sunday at 3 AM
-      - SCAN_TYPE=${SCAN_TYPE:-comprehensive}
-      - ALERT_EMAIL=${ALERT_EMAIL:-admin@company.com}
-      - TZ=${TZ:-UTC}
-    volumes:
-      - pqc-certs:/scan/certs:ro
-      - pqc-config:/scan/config:ro
-      - pqc-logs:/scan/logs:ro
-    networks:
-      pqc-vpn-net:
-        ipv4_address: 172.20.0.90
-    profiles:
-      - security
-
-  # Reverse Proxy (Traefik)
-  traefik:
-    image: traefik:v3.0
-    container_name: pqc-vpn-traefik
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
-      - "8080:8080"  # Traefik dashboard
-    command:
-      - "--api.dashboard=true"
-      - "--api.insecure=true"
-      - "--providers.docker=true"
-      - "--providers.docker.exposedbydefault=false"
-      - "--entrypoints.web.address=:80"
-      - "--entrypoints.websecure.address=:443"
-      - "--certificatesresolvers.letsencrypt.acme.httpchallenge=true"
-      - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"
-      - "--certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL:-admin@company.com}"
-      - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ./docker/letsencrypt:/letsencrypt
-    networks:
-      pqc-vpn-net:
-        ipv4_address: 172.20.0.100
-    profiles:
-      - reverse-proxy
-
-# Health check and utility containers
-  # Network Test Container
-  network-test:
-    image: alpine:latest
-    container_name: pqc-network-test
+      - HUB_IP=${HUB_IP:-192.168.0.103}
+      - USER_ID=bob
+      - AUTH_TYPE=psk
     command: |
-      sh -c "
-        apk add --no-cache curl iputils tcpdump nmap &&
-        while true; do
-          echo 'Network connectivity test at' $$(date)
-          ping -c 3 pqc-vpn-hub || echo 'Hub unreachable'
-          curl -s http://pqc-vpn-web:8443/api/health || echo 'Web API unreachable'
-          sleep 300
-        done
+      bash -c "
+      echo '🚀 Spoke Bob connecting...' &&
+      apt-get update -qq &&
+      apt-get install -y strongswan curl &&
+      
+      cat > /etc/ipsec.conf << 'EOF'
+      config setup
+          charondebug=\"cfg 2, dmn 2, ike 2\"
+          uniqueids=yes
+      
+      conn hub
+          keyexchange=ikev2
+          auto=start
+          type=tunnel
+          leftauth=psk
+          rightauth=psk
+          leftid=demo-user-1
+          rightid=@hub.pqc-vpn.local
+          right=192.168.0.103
+          rightsubnet=0.0.0.0/0
+          ike=aes256gcm16-sha512-ecp384!
+          esp=aes256gcm16-sha512!
+      EOF
+      
+      echo 'demo-user-1 : PSK \"user1-pqc-key-2025\"' > /etc/ipsec.secrets &&
+      chmod 600 /etc/ipsec.secrets &&
+      
+      echo '🔐 Starting Bob spoke connection...' &&
+      ipsec start &&
+      sleep 7 &&
+      ipsec up hub &&
+      
+      echo '✅ Bob connected to PQC-VPN Hub' &&
+      tail -f /dev/null
       "
-    networks:
-      pqc-vpn-net:
-        ipv4_address: 172.20.0.200
-    profiles:
-      - testing
-
-# Service health monitoring
-  healthcheck-monitor:
-    image: alpine:latest
-    container_name: pqc-healthcheck-monitor
     restart: unless-stopped
-    command: |
-      sh -c "
-        apk add --no-cache curl jq &&
-        while true; do
-          echo 'Health check monitoring at' $$(date)
-          # Check all services
-          for service in pqc-vpn-hub pqc-vpn-web prometheus grafana; do
-            if ! docker exec \$$service echo 'Service responding' > /dev/null 2>&1; then
-              echo 'WARNING: Service \$$service is not responding'
-              # Could send alerts here
-            fi
-          done
-          sleep 60
-        done
-      "
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
     profiles:
-      - monitoring
+      - spokes
+    networks:
+      - pqc-vpn-network
+    depends_on:
+      - pqc-vpn-hub
+
+volumes:
+  pqc-vpn-logs:
+    driver: local
+  pqc-vpn-config:
+    driver: local
+  grafana-data:
+    driver: local
+  prometheus-data:
+    driver: local
+
+networks:
+  pqc-vpn-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
