@@ -1,131 +1,211 @@
-# PQC-VPN Hub with Real Post-Quantum Cryptography
+# PQC-VPN Hub Docker Image
+# Production-ready strongSwan with OpenSSL 3.3 + OQS Provider
 FROM ubuntu:22.04
 
-# Prevent interactive prompts
-ENV DEBIAN_FRONTEND=noninteractive
-ENV TERM=xterm
+LABEL maintainer="PQC-VPN Project"
+LABEL version="1.0.0"
+LABEL description="Post-Quantum Cryptography VPN Hub with strongSwan"
 
-# Install base dependencies
+# Prevent interactive prompts during package installation
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=UTC
+
+# Set working directory
+WORKDIR /opt/pqc-vpn
+
+# Install system dependencies
 RUN apt-get update && apt-get install -y \
     build-essential \
     cmake \
+    ninja-build \
     git \
     wget \
     curl \
     pkg-config \
+    libtool \
+    autotools-dev \
     libssl-dev \
+    libgmp-dev \
+    libtspi-dev \
+    libldap2-dev \
+    libcurl4-openssl-dev \
+    libsystemd-dev \
+    libnl-3-dev \
+    libnl-route-3-dev \
+    iptables-dev \
     python3 \
     python3-pip \
     python3-venv \
-    ninja-build \
-    unzip \
-    net-tools \
+    python3-dev \
+    sqlite3 \
+    iputils-ping \
     iproute2 \
     iptables \
-    iputils-ping \
-    tcpdump \
-    supervisor \
-    nginx \
-    redis-server \
-    sqlite3 \
+    kmod \
+    net-tools \
+    dnsutils \
+    vim \
+    htop \
+    jq \
+    ca-certificates \
+    gnupg \
+    lsb-release \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies
-COPY requirements.txt /tmp/
-RUN pip3 install -r /tmp/requirements.txt
+# Create necessary directories
+RUN mkdir -p /opt/pqc-vpn/{bin,lib,data,logs,scripts,web} \
+    && mkdir -p /etc/ipsec.d/{certs,private,cacerts,crls} \
+    && mkdir -p /var/log/pqc-vpn \
+    && mkdir -p /usr/local/share/pqc-vpn
 
-# Build and install liboqs (Open Quantum Safe library)
-WORKDIR /opt
-RUN git clone --depth 1 --branch main https://github.com/open-quantum-safe/liboqs.git && \
+# Install OpenSSL 3.3 with PQC support
+RUN cd /tmp && \
+    git clone --depth 1 --branch openssl-3.3.2 https://github.com/openssl/openssl.git && \
+    cd openssl && \
+    ./Configure --prefix=/usr/local/ssl --openssldir=/usr/local/ssl \
+        enable-shared enable-pic enable-fips && \
+    make -j$(nproc) && \
+    make install && \
+    echo "/usr/local/ssl/lib64" > /etc/ld.so.conf.d/openssl.conf && \
+    ldconfig && \
+    cd / && rm -rf /tmp/openssl
+
+# Install liboqs (Open Quantum Safe)
+RUN cd /tmp && \
+    git clone --depth 1 --branch main https://github.com/open-quantum-safe/liboqs.git && \
     cd liboqs && \
     mkdir build && cd build && \
-    cmake -GNinja -DCMAKE_INSTALL_PREFIX=/usr/local \
-                  -DOQS_BUILD_ONLY_LIB=ON \
-                  -DOQS_MINIMAL_BUILD="KEM_kyber_512;KEM_kyber_768;KEM_kyber_1024;SIG_dilithium_2;SIG_dilithium_3;SIG_dilithium_5;SIG_falcon_512;SIG_falcon_1024" \
-                  .. && \
-    ninja && ninja install && \
-    ldconfig
+    cmake -GNinja \
+        -DCMAKE_INSTALL_PREFIX=/usr/local \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DOQS_USE_OPENSSL=ON \
+        -DOQS_BUILD_ONLY_LIB=ON \
+        -DOQS_ENABLE_KEM_KYBER=ON \
+        -DOQS_ENABLE_SIG_DILITHIUM=ON \
+        -DOQS_ENABLE_SIG_FALCON=ON \
+        -DOQS_ENABLE_SIG_SPHINCS=ON \
+        -DOQS_BUILD_SHARED_LIBS=ON \
+        .. && \
+    ninja && \
+    ninja install && \
+    ldconfig && \
+    cd / && rm -rf /tmp/liboqs
 
-# Build and install OpenSSL with OQS provider
-RUN git clone --depth 1 --branch OQS-OpenSSL_1_1_1-stable https://github.com/open-quantum-safe/openssl.git oqs-openssl && \
-    cd oqs-openssl && \
-    ./Configure linux-x86_64 \
-                --prefix=/usr/local/oqs-openssl \
-                --openssldir=/usr/local/oqs-openssl/ssl \
-                -Wl,-rpath,/usr/local/oqs-openssl/lib && \
-    make -j$(nproc) && make install
-
-# Build OQS-OpenSSL provider for OpenSSL 3.x
-RUN git clone --depth 1 --branch main https://github.com/open-quantum-safe/oqs-provider.git && \
+# Install OQS-OpenSSL Provider
+RUN cd /tmp && \
+    git clone --depth 1 --branch main https://github.com/open-quantum-safe/oqs-provider.git && \
     cd oqs-provider && \
-    cmake -DCMAKE_BUILD_TYPE=Release \
-          -DCMAKE_PREFIX_PATH=/usr/local \
-          -DCMAKE_INSTALL_PREFIX=/usr/local \
-          -S . -B _build && \
-    cmake --build _build && cmake --install _build
+    cmake -GNinja \
+        -DCMAKE_INSTALL_PREFIX=/usr/local \
+        -DOPENSSL_ROOT_DIR=/usr/local/ssl \
+        -S . -B _build && \
+    ninja -C _build && \
+    ninja -C _build install && \
+    cd / && rm -rf /tmp/oqs-provider
 
-# Build strongSwan with PQC support
-RUN wget https://download.strongswan.org/strongswan-5.9.14.tar.bz2 && \
-    tar xjf strongswan-5.9.14.tar.bz2 && \
+# Configure OpenSSL to use OQS provider
+RUN echo '[openssl_init]' >> /usr/local/ssl/openssl.cnf && \
+    echo 'providers = provider_sect' >> /usr/local/ssl/openssl.cnf && \
+    echo '' >> /usr/local/ssl/openssl.cnf && \
+    echo '[provider_sect]' >> /usr/local/ssl/openssl.cnf && \
+    echo 'default = default_sect' >> /usr/local/ssl/openssl.cnf && \
+    echo 'oqsprovider = oqsprovider_sect' >> /usr/local/ssl/openssl.cnf && \
+    echo '' >> /usr/local/ssl/openssl.cnf && \
+    echo '[default_sect]' >> /usr/local/ssl/openssl.cnf && \
+    echo 'activate = 1' >> /usr/local/ssl/openssl.cnf && \
+    echo '' >> /usr/local/ssl/openssl.cnf && \
+    echo '[oqsprovider_sect]' >> /usr/local/ssl/openssl.cnf && \
+    echo 'activate = 1' >> /usr/local/ssl/openssl.cnf && \
+    echo 'module = /usr/local/lib/ossl-modules/oqsprovider.so' >> /usr/local/ssl/openssl.cnf
+
+# Install strongSwan with OQS support
+RUN cd /tmp && \
+    wget https://download.strongswan.org/strongswan-5.9.14.tar.gz && \
+    tar xzf strongswan-5.9.14.tar.gz && \
     cd strongswan-5.9.14 && \
-    ./configure --prefix=/usr/local/strongswan \
-                --sysconfdir=/etc \
-                --enable-openssl \
-                --enable-pki \
-                --enable-swanctl \
-                --enable-systemd \
-                --enable-vici \
-                --enable-python-eggs \
-                --enable-python-eggs-install \
-                --with-lib-prefix=/usr/local \
-                --with-openssl-lib=/usr/local/oqs-openssl/lib \
-                --with-openssl-include=/usr/local/oqs-openssl/include && \
-    make -j$(nproc) && make install
+    ./configure \
+        --prefix=/usr/local/strongswan \
+        --sysconfdir=/etc \
+        --enable-openssl \
+        --enable-pki \
+        --enable-swanctl \
+        --enable-charon \
+        --enable-stroke \
+        --enable-kernel-netlink \
+        --enable-socket-default \
+        --enable-updown \
+        --enable-eap-identity \
+        --enable-eap-md5 \
+        --enable-eap-mschapv2 \
+        --enable-eap-radius \
+        --enable-xauth-generic \
+        --enable-unity \
+        --enable-resolve \
+        --enable-sql \
+        --enable-sqlite \
+        --enable-attr-sql \
+        --enable-mediation \
+        --enable-openssl-ec \
+        --enable-curl \
+        --enable-ldap \
+        --enable-systemd \
+        --enable-counters \
+        --with-lib-prefix=/usr/local \
+        --with-openssl-lib=/usr/local/ssl/lib64 \
+        --with-openssl-include=/usr/local/ssl/include && \
+    make -j$(nproc) && \
+    make install && \
+    cd / && rm -rf /tmp/strongswan*
 
-# Configure library paths
-RUN echo "/usr/local/lib" > /etc/ld.so.conf.d/oqs.conf && \
-    echo "/usr/local/oqs-openssl/lib" > /etc/ld.so.conf.d/oqs-openssl.conf && \
-    echo "/usr/local/strongswan/lib" > /etc/ld.so.conf.d/strongswan.conf && \
-    ldconfig
+# Create Python virtual environment and install dependencies
+RUN python3 -m venv /opt/pqc-vpn/venv && \
+    /opt/pqc-vpn/venv/bin/pip install --upgrade pip setuptools wheel
 
-# Add binaries to PATH
-ENV PATH="/usr/local/strongswan/bin:/usr/local/strongswan/sbin:/usr/local/oqs-openssl/bin:${PATH}"
+# Copy and install Python requirements
+COPY requirements.txt /opt/pqc-vpn/
+RUN /opt/pqc-vpn/venv/bin/pip install -r /opt/pqc-vpn/requirements.txt
 
-# Copy PQC-VPN management tools
+# Copy application files
 COPY tools/ /opt/pqc-vpn/tools/
-COPY scripts/ /opt/pqc-vpn/scripts/
-COPY configs/hub/ /opt/pqc-vpn/configs/
 COPY web/ /opt/pqc-vpn/web/
+COPY scripts/ /opt/pqc-vpn/scripts/
+COPY configs/ /opt/pqc-vpn/configs/
 
-# Set up working directories
-RUN mkdir -p /etc/ipsec.d/{private,certs,cacerts,crls} \
-             /var/log/strongswan \
-             /var/run/strongswan \
-             /opt/pqc-vpn/{data,logs,certs} \
-             /etc/supervisor/conf.d
+# Make scripts executable
+RUN chmod +x /opt/pqc-vpn/scripts/*.sh && \
+    chmod +x /opt/pqc-vpn/tools/*.py
 
-# Copy configuration files
-COPY docker/config/strongswan.conf /etc/strongswan.conf
-COPY docker/config/supervisor-hub.conf /etc/supervisor/conf.d/pqc-hub.conf
-COPY docker/config/nginx-hub.conf /etc/nginx/sites-available/pqc-hub
-COPY docker/scripts/init-pqc-hub.sh /opt/init-pqc-hub.sh
+# Create symlinks for easy access
+RUN ln -s /usr/local/strongswan/sbin/ipsec /usr/local/bin/ipsec && \
+    ln -s /usr/local/ssl/bin/openssl /usr/local/bin/openssl && \
+    ln -s /opt/pqc-vpn/tools/pqc-vpn-manager.py /usr/local/bin/pqc-vpn-manager && \
+    ln -s /opt/pqc-vpn/tools/connection-monitor.py /usr/local/bin/pqc-connection-monitor
 
-# Configure nginx
-RUN rm -f /etc/nginx/sites-enabled/default && \
-    ln -s /etc/nginx/sites-available/pqc-hub /etc/nginx/sites-enabled/ && \
-    mkdir -p /var/log/nginx
+# Set proper permissions
+RUN chmod 700 /etc/ipsec.d/private && \
+    chmod 755 /etc/ipsec.d/certs && \
+    chmod 755 /etc/ipsec.d/cacerts && \
+    chown -R root:root /opt/pqc-vpn
 
-# Set permissions
-RUN chmod +x /opt/init-pqc-hub.sh /opt/pqc-vpn/scripts/*.sh && \
-    chmod 700 /etc/ipsec.d/private && \
-    chmod 755 /etc/ipsec.d/{certs,cacerts,crls}
+# Create systemd service files directory
+RUN mkdir -p /etc/systemd/system
+
+# Copy entrypoint script
+COPY docker/hub-entrypoint.sh /opt/pqc-vpn/scripts/
+RUN chmod +x /opt/pqc-vpn/scripts/hub-entrypoint.sh
 
 # Expose ports
-EXPOSE 500/udp 4500/udp 8080/tcp 8443/tcp 9090/tcp
+EXPOSE 500/udp 4500/udp 8443/tcp 9090/tcp 9100/tcp
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD /usr/local/strongswan/sbin/ipsec status || exit 1
+    CMD /usr/local/bin/pqc-vpn-manager status --quick || exit 1
 
-# Initialize and start services
-CMD ["/opt/init-pqc-hub.sh"]
+# Set environment variables
+ENV PATH="/opt/pqc-vpn/venv/bin:/usr/local/strongswan/sbin:/usr/local/ssl/bin:${PATH}"
+ENV LD_LIBRARY_PATH="/usr/local/lib:/usr/local/ssl/lib64:${LD_LIBRARY_PATH}"
+ENV OPENSSL_CONF="/usr/local/ssl/openssl.cnf"
+
+# Start services
+ENTRYPOINT ["/opt/pqc-vpn/scripts/hub-entrypoint.sh"]
+CMD ["hub"]
