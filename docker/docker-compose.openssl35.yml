@@ -1,0 +1,32 @@
+version: '3.8'
+
+# PQC-VPN Docker Compose for OpenSSL 3.5 Enterprise Deployment
+services:
+  pqc-vpn-hub:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.pqc-hub
+      args:
+        OPENSSL_VERSION: "3.5.0"
+    image: pqc-vpn/hub-openssl35:latest
+    container_name: pqc-vpn-hub-openssl35
+    ports:
+      - "500:500/udp"
+      - "4500:4500/udp"
+      - "8443:8443/tcp"
+      - "9090:9090/tcp"
+    environment:
+      - HUB_IP=${HUB_IP:-127.0.0.1}
+      - OPENSSL_CONF=/usr/local/openssl35/ssl/openssl.cnf
+      - LD_LIBRARY_PATH=/usr/local/openssl35/lib
+    volumes:
+      - pqc-certs:/etc/ipsec.d
+      - pqc-logs:/var/log
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    restart: unless-stopped
+
+volumes:
+  pqc-certs:
+  pqc-logs:
