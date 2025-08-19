@@ -1,0 +1,484 @@
+version: '3.8'
+
+# PQC-VPN Production Deployment with OpenSSL 3.5
+# Enterprise-grade configuration for production environments
+# Version: 3.0.0 - OpenSSL 3.5 Native Implementation
+
+services:
+  # PQC-VPN Hub with OpenSSL 3.5
+  pqc-vpn-hub:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.pqc-hub
+      args:
+        OPENSSL_VERSION: ${OPENSSL_VERSION:-3.5.0}
+        STRONGSWAN_VERSION: ${STRONGSWAN_VERSION:-5.9.14}
+        ENABLE_FIPS: ${ENABLE_FIPS:-false}
+    image: pqc-vpn/hub-openssl35:latest
+    container_name: pqc-vpn-hub-openssl35
+    hostname: pqc-vpn-hub
+    privileged: true
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - SYS_MODULE
+    networks:
+      - pqc-vpn-network
+    ports:
+      - "${VPN_PORT_IKE:-500}:500/udp"
+      - "${VPN_PORT_NATT:-4500}:4500/udp"
+      - "${WEB_PORT:-8443}:8443/tcp"
+      - "${METRICS_PORT:-9090}:9090/tcp"
+    volumes:
+      - pqc-vpn-config:/etc/ipsec.d
+      - pqc-vpn-logs:/var/log
+      - pqc-vpn-data:/opt/pqc-vpn/data
+      - /lib/modules:/lib/modules:ro
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      # OpenSSL 3.5 Configuration
+      - OPENSSL_CONF=/usr/local/openssl35/ssl/openssl.cnf
+      - LD_LIBRARY_PATH=/usr/local/openssl35/lib
+      - PATH=/usr/local/openssl35/bin:/usr/local/strongswan/sbin:/usr/local/strongswan/bin:/usr/local/bin:/usr/bin:/bin
+      
+      # VPN Configuration
+      - HUB_IP=${HUB_IP:-192.168.1.100}
+      - VPN_NETWORK=${VPN_NETWORK:-10.10.0.0/16}
+      - CLIENT_NETWORK=${CLIENT_NETWORK:-10.10.1.0/24}
+      - PSK_NETWORK=${PSK_NETWORK:-10.10.2.0/24}
+      
+      # Authentication
+      - AUTH_METHODS=${AUTH_METHODS:-pki,psk,hybrid}
+      - DEFAULT_PSK=${DEFAULT_PSK:-}
+      
+      # Cryptographic Settings
+      - CRYPTO_POLICY=${CRYPTO_POLICY:-enterprise}
+      - KEY_TYPE=${KEY_TYPE:-rsa}
+      - KEY_SIZE=${KEY_SIZE:-4096}
+      - ENABLE_FIPS=${ENABLE_FIPS:-false}
+      
+      # Performance Settings
+      - MAX_CONNECTIONS=${MAX_CONNECTIONS:-1000}
+      - THREAD_COUNT=${THREAD_COUNT:-16}
+      - ENABLE_HARDWARE_ACCEL=${ENABLE_HARDWARE_ACCEL:-true}
+      
+      # Monitoring and Logging
+      - ENABLE_MONITORING=${ENABLE_MONITORING:-true}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - METRICS_ENABLED=${METRICS_ENABLED:-true}
+      
+      # Enterprise Features
+      - ENABLE_HA=${ENABLE_HA:-false}
+      - BACKUP_ENABLED=${BACKUP_ENABLED:-true}
+      - AUDIT_LOGGING=${AUDIT_LOGGING:-true}
+      
+      # Deployment Settings
+      - DEPLOYMENT_MODE=${DEPLOYMENT_MODE:-production}
+      - ORGANIZATION=${ORGANIZATION:-PQC-VPN Enterprise}
+      - ADMIN_EMAIL=${ADMIN_EMAIL:-admin@pqc-vpn.local}
+    restart: unless-stopped
+    healthcheck:
+      test: [
+        "CMD", 
+        "/opt/pqc-vpn/scripts/health-check.sh"
+      ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    labels:
+      - "com.pqc-vpn.service=hub"
+      - "com.pqc-vpn.version=3.0.0"
+      - "com.pqc-vpn.openssl=3.5"
+      - "traefik.enable=true"
+      - "traefik.http.routers.pqc-vpn.rule=Host(`${DOMAIN:-pqc-vpn.local}`)"
+      - "traefik.http.routers.pqc-vpn.tls=true"
+      - "traefik.http.services.pqc-vpn.loadbalancer.server.port=8443"
+
+  # Redis for session management and caching
+  redis:
+    image: redis:7-alpine
+    container_name: pqc-vpn-redis
+    networks:
+      - pqc-vpn-network
+    volumes:
+      - pqc-vpn-redis:/data
+    command: >
+      redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      --save 900 1
+      --save 300 10
+      --save 60 10000
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    labels:
+      - "com.pqc-vpn.service=redis"
+
+  # Prometheus for metrics collection
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: pqc-vpn-prometheus
+    networks:
+      - pqc-vpn-network
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - pqc-vpn-prometheus:/prometheus
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/alert_rules.yml:/etc/prometheus/alert_rules.yml:ro
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.enable-lifecycle'
+      - '--web.enable-admin-api'
+    restart: unless-stopped
+    depends_on:
+      - pqc-vpn-hub
+    labels:
+      - "com.pqc-vpn.service=prometheus"
+
+  # Grafana for visualization
+  grafana:
+    image: grafana/grafana:latest
+    container_name: pqc-vpn-grafana
+    networks:
+      - pqc-vpn-network
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    volumes:
+      - pqc-vpn-grafana:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin123}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_AUTH_ANONYMOUS_ENABLED=false
+      - GF_SECURITY_SECRET_KEY=${GRAFANA_SECRET_KEY:-changeme}
+      - GF_INSTALL_PLUGINS=grafana-piechart-panel,grafana-worldmap-panel
+      - GF_SERVER_DOMAIN=${DOMAIN:-pqc-vpn.local}
+      - GF_SERVER_ROOT_URL=https://${DOMAIN:-pqc-vpn.local}/grafana/
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+    labels:
+      - "com.pqc-vpn.service=grafana"
+
+  # AlertManager for alerting
+  alertmanager:
+    image: prom/alertmanager:latest
+    container_name: pqc-vpn-alertmanager
+    networks:
+      - pqc-vpn-network
+    ports:
+      - "${ALERTMANAGER_PORT:-9093}:9093"
+    volumes:
+      - pqc-vpn-alertmanager:/alertmanager
+      - ./monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--storage.path=/alertmanager'
+      - '--web.external-url=http://localhost:9093'
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+    labels:
+      - "com.pqc-vpn.service=alertmanager"
+
+  # Node Exporter for system metrics
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: pqc-vpn-node-exporter
+    networks:
+      - pqc-vpn-network
+    ports:
+      - "${NODE_EXPORTER_PORT:-9100}:9100"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.rootfs=/rootfs'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    restart: unless-stopped
+    labels:
+      - "com.pqc-vpn.service=node-exporter"
+
+  # Reverse Proxy (Traefik) for enterprise deployments
+  traefik:
+    image: traefik:v3.0
+    container_name: pqc-vpn-traefik
+    networks:
+      - pqc-vpn-network
+      - traefik-public
+    ports:
+      - "80:80"
+      - "443:443"
+      - "${TRAEFIK_DASHBOARD_PORT:-8080}:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - pqc-vpn-traefik:/certificates
+      - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro
+    environment:
+      - TRAEFIK_API_DASHBOARD=true
+      - TRAEFIK_API_INSECURE=false
+      - TRAEFIK_CERTIFICATESRESOLVERS_LETSENCRYPT_ACME_EMAIL=${ADMIN_EMAIL:-admin@pqc-vpn.local}
+    restart: unless-stopped
+    labels:
+      - "com.pqc-vpn.service=traefik"
+      - "traefik.enable=true"
+      - "traefik.http.routers.api.rule=Host(`traefik.${DOMAIN:-pqc-vpn.local}`)"
+      - "traefik.http.routers.api.tls=true"
+      - "traefik.http.routers.api.service=api@internal"
+
+  # Database for user management and audit logs
+  postgres:
+    image: postgres:15-alpine
+    container_name: pqc-vpn-postgres
+    networks:
+      - pqc-vpn-network
+    volumes:
+      - pqc-vpn-postgres:/var/lib/postgresql/data
+      - ./database/init:/docker-entrypoint-initdb.d:ro
+    environment:
+      - POSTGRES_DB=${DB_NAME:-pqcvpn}
+      - POSTGRES_USER=${DB_USER:-pqcvpn}
+      - POSTGRES_PASSWORD=${DB_PASSWORD:-changeme123}
+      - POSTGRES_INITDB_ARGS=--auth-host=scram-sha-256
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-pqcvpn}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    labels:
+      - "com.pqc-vpn.service=postgres"
+
+  # Log aggregation with Loki
+  loki:
+    image: grafana/loki:latest
+    container_name: pqc-vpn-loki
+    networks:
+      - pqc-vpn-network
+    ports:
+      - "${LOKI_PORT:-3100}:3100"
+    volumes:
+      - pqc-vpn-loki:/loki
+      - ./monitoring/loki.yml:/etc/loki/local-config.yaml:ro
+    command: -config.file=/etc/loki/local-config.yaml
+    restart: unless-stopped
+    labels:
+      - "com.pqc-vpn.service=loki"
+
+  # Log shipping with Promtail
+  promtail:
+    image: grafana/promtail:latest
+    container_name: pqc-vpn-promtail
+    networks:
+      - pqc-vpn-network
+    volumes:
+      - pqc-vpn-logs:/var/log:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - ./monitoring/promtail.yml:/etc/promtail/config.yml:ro
+    command: -config.file=/etc/promtail/config.yml
+    restart: unless-stopped
+    depends_on:
+      - loki
+    labels:
+      - "com.pqc-vpn.service=promtail"
+
+  # Backup service for enterprise deployments
+  backup:
+    image: alpine:latest
+    container_name: pqc-vpn-backup
+    networks:
+      - pqc-vpn-network
+    volumes:
+      - pqc-vpn-config:/backup/config:ro
+      - pqc-vpn-data:/backup/data:ro
+      - pqc-vpn-postgres:/backup/postgres:ro
+      - pqc-vpn-backups:/backups
+      - ./backup/backup.sh:/backup.sh:ro
+    environment:
+      - BACKUP_SCHEDULE=${BACKUP_SCHEDULE:-0 2 * * *}
+      - BACKUP_RETENTION_DAYS=${BACKUP_RETENTION_DAYS:-30}
+      - S3_BUCKET=${S3_BUCKET:-}
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY:-}
+      - S3_SECRET_KEY=${S3_SECRET_KEY:-}
+    command: >
+      sh -c "
+        apk add --no-cache dcron postgresql-client aws-cli &&
+        echo '${BACKUP_SCHEDULE:-0 2 * * *} /backup.sh' | crontab - &&
+        crond -f -d 8
+      "
+    restart: unless-stopped
+    depends_on:
+      - pqc-vpn-hub
+      - postgres
+    labels:
+      - "com.pqc-vpn.service=backup"
+
+networks:
+  # Internal PQC-VPN network
+  pqc-vpn-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${DOCKER_NETWORK:-172.20.0.0/16}
+    labels:
+      - "com.pqc-vpn.network=internal"
+  
+  # External Traefik network for reverse proxy
+  traefik-public:
+    external: true
+
+volumes:
+  # PQC-VPN Core Data
+  pqc-vpn-config:
+    driver: local
+    labels:
+      - "com.pqc-vpn.volume=config"
+  
+  pqc-vpn-data:
+    driver: local
+    labels:
+      - "com.pqc-vpn.volume=data"
+  
+  pqc-vpn-logs:
+    driver: local
+    labels:
+      - "com.pqc-vpn.volume=logs"
+  
+  # Monitoring Data
+  pqc-vpn-prometheus:
+    driver: local
+    labels:
+      - "com.pqc-vpn.volume=prometheus"
+  
+  pqc-vpn-grafana:
+    driver: local
+    labels:
+      - "com.pqc-vpn.volume=grafana"
+  
+  pqc-vpn-alertmanager:
+    driver: local
+    labels:
+      - "com.pqc-vpn.volume=alertmanager"
+  
+  pqc-vpn-loki:
+    driver: local
+    labels:
+      - "com.pqc-vpn.volume=loki"
+  
+  # Database Data
+  pqc-vpn-postgres:
+    driver: local
+    labels:
+      - "com.pqc-vpn.volume=postgres"
+  
+  pqc-vpn-redis:
+    driver: local
+    labels:
+      - "com.pqc-vpn.volume=redis"
+  
+  # Infrastructure Data
+  pqc-vpn-traefik:
+    driver: local
+    labels:
+      - "com.pqc-vpn.volume=traefik"
+  
+  pqc-vpn-backups:
+    driver: local
+    labels:
+      - "com.pqc-vpn.volume=backups"
+
+# Secrets for enterprise deployments
+secrets:
+  ca_private_key:
+    file: ./secrets/ca-key.pem
+  
+  hub_private_key:
+    file: ./secrets/hub-key.pem
+  
+  psk_secrets:
+    file: ./secrets/psk.txt
+  
+  database_password:
+    external: true
+    name: pqc_vpn_db_password
+  
+  grafana_admin_password:
+    external: true
+    name: pqc_vpn_grafana_password
+
+# Configuration for enterprise deployments
+configs:
+  strongswan_conf:
+    file: ./configs/strongswan.conf
+  
+  ipsec_conf:
+    file: ./configs/ipsec.conf
+  
+  openssl_conf:
+    file: ./configs/openssl.cnf
+  
+  prometheus_conf:
+    file: ./monitoring/prometheus.yml
+  
+  grafana_datasources:
+    file: ./monitoring/grafana/datasources/prometheus.yml
+
+# Health check configuration
+x-health-check: &default-health-check
+  interval: 30s
+  timeout: 10s
+  retries: 3
+  start_period: 30s
+
+# Restart policy for all services
+x-restart-policy: &default-restart
+  restart_policy:
+    condition: unless-stopped
+    delay: 5s
+    max_attempts: 3
+    window: 120s
+
+# Logging configuration
+x-logging: &default-logging
+  logging:
+    driver: "json-file"
+    options:
+      max-size: "10m"
+      max-file: "3"
+      labels: "com.pqc-vpn.service"
+
+# Resource limits for production
+x-resources: &default-resources
+  deploy:
+    resources:
+      limits:
+        memory: 1G
+        cpus: '0.5'
+      reservations:
+        memory: 256M
+        cpus: '0.1'
+
+# Security options
+x-security: &default-security
+  security_opt:
+    - no-new-privileges:true
+  read_only: false
+  tmpfs:
+    - /tmp:noexec,nosuid,size=100m
