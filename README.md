@@ -7,7 +7,7 @@
 [![Kubernetes](https://img.shields.io/badge/Kubernetes-supported-blue.svg)](https://kubernetes.io/)
 [![Real PQC](https://img.shields.io/badge/PQC-Real%20Implementation-red.svg)](https://github.com/QEntangle/PQC-VPN)
 
-**Enterprise-grade VPN with ACTUAL Post-Quantum Cryptography implementation using real Kyber-1024 and Dilithium-5 algorithms.**
+**VPN with ACTUAL Post-Quantum Cryptography implementation using real Kyber-1024 and Dilithium-5 algorithms.**
 
 ⚠️ **This is NOT a simulation** - This implements real NIST-standardized post-quantum algorithms that protect against quantum computer attacks.
 
@@ -113,7 +113,7 @@ cat /etc/ipsec.conf | grep -E "(kyber|dilithium)"
 ```
 ┌─────────────────────────────────────────┐
 │           Management Dashboard          │
-│        (Real metrics, not fake)        │
+│          (Basic monitoring)            │
 ├─────────────────────────────────────────┤
 │         strongSwan IPsec Engine         │
 │      (Built with PQC extensions)       │
@@ -152,10 +152,10 @@ All connections protected by:
 
 - **🔐 Real PQC Hub**: strongSwan with liboqs + OQS-OpenSSL
 - **📱 PQC Clients**: Cross-platform spoke clients
-- **🖥️ Management Dashboard**: Real-time monitoring (not simulated)
+- **🖥️ Management Dashboard**: Basic monitoring and management
 - **🔑 Certificate Authority**: Dilithium-5 certificate generation
-- **👥 User Management**: Enterprise user administration
-- **📊 Monitoring Stack**: Prometheus + Grafana with real metrics
+- **👥 User Management**: Basic user administration
+- **📊 Monitoring**: Basic connection monitoring
 
 ### Supported Algorithms
 
@@ -172,10 +172,8 @@ All connections protected by:
 ### Authentication Methods
 
 - **🔐 PKI**: X.509 certificates with Dilithium-5 signatures
-- **🔑 PSK**: Quantum-safe pre-shared keys
-- **🛡️ Hybrid**: PKI + PSK for maximum security
-- **📡 RADIUS**: Enterprise directory integration
-- **🔒 HSM**: Hardware security module support
+- **🔑 PSK**: Pre-shared keys
+- **🛡️ Hybrid**: PKI + PSK for enhanced security
 
 ## 💻 Platform Support
 
@@ -196,7 +194,6 @@ All connections protected by:
 - **☸️ Kubernetes**: `kubernetes/pqc-vpn-production.yaml`
 - **☁️ Cloud**: AWS, Azure, GCP support
 - **🖥️ Bare Metal**: Native installation scripts
-- **🏢 Enterprise**: HA clustering, load balancing
 
 ## 🎯 Use Cases
 
@@ -220,28 +217,21 @@ All connections protected by:
 
 ## 📊 Performance
 
-### Throughput Benchmarks
+### Performance Considerations
 
-| **Network** | **Classical VPN** | **PQC-VPN** | **Overhead** |
-|-------------|-------------------|-------------|--------------|
-| **1 Gbps** | 950 Mbps | 850 Mbps | ~10% |
-| **100 Mbps** | 98 Mbps | 92 Mbps | ~6% |
-| **10 Mbps** | 9.8 Mbps | 9.6 Mbps | ~2% |
+⚠️ **Post-quantum cryptography introduces computational overhead compared to classical algorithms.**
 
-### Latency Impact
+- **CPU Usage**: PQC algorithms are more computationally intensive
+- **Memory Usage**: Larger key sizes require more memory
+- **Network Overhead**: Larger certificates and signatures
+- **Connection Establishment**: Slower initial handshake
 
-| **Algorithm** | **Additional Latency** | **Recommended Use** |
-|---------------|------------------------|-------------------|
-| **Kyber-512** | +2-5ms | High performance |
-| **Kyber-768** | +5-8ms | Balanced |
-| **Kyber-1024** | +8-12ms | Maximum security |
+### Recommendations
 
-### Scalability
-
-- **Concurrent Users**: 10,000+ (hardware dependent)
-- **Connections/Second**: 100+ new connections
-- **CPU Overhead**: ~15-25% vs classical algorithms
-- **Memory Usage**: ~2MB per active connection
+- Use **Kyber-512** for high-performance scenarios requiring lower latency
+- Use **Kyber-768** for balanced security and performance
+- Use **Kyber-1024** for maximum security where performance is less critical
+- Test performance in your specific environment before production deployment
 
 ## 🔒 Security
 
@@ -255,9 +245,7 @@ All connections protected by:
 
 ✅ **Security Standards**:
 - NIST Post-Quantum Cryptography standards
-- FIPS 140-2 Level 3 (with HSM)
-- Common Criteria EAL4+
-- SOC 2 Type II compliance
+- Uses algorithms from NIST Round 3 standardization
 
 ### Cryptographic Agility
 
@@ -281,9 +269,8 @@ performance:
 ### Web Dashboard
 
 - **URL**: `https://your-hub-ip:8443`
-- **Features**: Real-time monitoring, user management, certificate administration
-- **Authentication**: Multi-factor authentication support
-- **API**: RESTful API for automation
+- **Features**: Basic monitoring, user management, certificate administration
+- **Authentication**: Username/password authentication
 
 ### Command Line Tools
 
@@ -296,19 +283,7 @@ sudo python3 tools/pqc-vpn-manager.py status
 
 # Certificate management
 sudo python3 tools/pqc-vpn-manager.py cert rotate
-
-# Performance analysis
-sudo python3 tools/pqc-vpn-manager.py performance
 ```
-
-### Enterprise Integration
-
-- **📊 Prometheus**: Metrics collection
-- **📈 Grafana**: Visual dashboards
-- **📧 SMTP**: Email notifications
-- **💬 Slack**: Team collaboration alerts
-- **🔔 PagerDuty**: Incident management
-- **📋 SIEM**: Security information integration
 
 ## 📚 Documentation
 
@@ -320,13 +295,11 @@ sudo python3 tools/pqc-vpn-manager.py performance
 - **Installation**: Platform-specific installation guides
 - **Configuration**: Advanced configuration options
 - **Troubleshooting**: Common issues and solutions
-- **API Reference**: RESTful API documentation
 - **Security**: Best practices and hardening
 
 ### Algorithm Details
 - **Kyber**: NIST ML-KEM implementation details
 - **Dilithium**: NIST ML-DSA implementation details
-- **Performance**: Benchmarking and optimization
 - **Migration**: Transition from classical cryptography
 
 ## 🤝 Contributing
@@ -356,22 +329,22 @@ flake8 tools/ scripts/
 ## 🎯 Roadmap
 
 ### v2.1 (Q2 2025)
-- [ ] Hardware acceleration for PQC operations
-- [ ] Additional NIST Round 4 algorithms
-- [ ] Enhanced mobile client applications
-- [ ] Cloud HSM integration
+- [ ] Performance optimizations for PQC operations
+- [ ] Enhanced monitoring and metrics collection
+- [ ] Improved mobile client applications
+- [ ] Additional certificate management features
 
 ### v2.2 (Q3 2025)
-- [ ] Quantum Key Distribution (QKD) support
-- [ ] Multi-protocol support (WireGuard, OpenVPN)
-- [ ] AI-powered threat detection
-- [ ] Zero-trust network architecture
+- [ ] Integration with hardware security modules (HSM)
+- [ ] RADIUS/LDAP authentication support
+- [ ] Advanced load balancing features
+- [ ] Enhanced logging and audit capabilities
 
 ### v3.0 (Q4 2025)
 - [ ] Full IPv6 post-quantum support
-- [ ] Mesh networking capabilities
-- [ ] Blockchain identity management
-- [ ] Edge computing integration
+- [ ] Multi-protocol support (WireGuard, OpenVPN)
+- [ ] Enterprise directory integration
+- [ ] Advanced threat detection
 
 ## ⚠️ Important Notes
 
@@ -382,7 +355,7 @@ flake8 tools/ scripts/
 - **Monitor for security advisories** on PQC algorithms
 
 ### Performance Considerations
-- **PQC overhead**: ~15-25% performance impact expected
+- **PQC overhead**: Expect performance impact compared to classical algorithms
 - **Memory usage**: Higher than classical algorithms
 - **Network overhead**: Larger packet sizes
 - **CPU intensive**: Especially key generation
@@ -403,11 +376,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **Discussions**: [Community Q&A](https://github.com/QEntangle/PQC-VPN/discussions)
 - **Documentation**: Comprehensive guides included
 
-### Enterprise Support
-- **Professional Services**: Custom deployment and training
-- **24/7 Support**: Enterprise support contracts available
-- **Consulting**: PQC migration planning and implementation
-
 ### Security Issues
 For security vulnerabilities, please email: security@qentangle.com
 
@@ -417,14 +385,6 @@ For security vulnerabilities, please email: security@qentangle.com
 - **Open Quantum Safe**: PQC algorithm implementations
 - **NIST**: Post-quantum cryptography standardization
 - **Contributors**: Community developers and testers
-
-## 📊 Status
-
-- **Build Status**: ✅ Passing
-- **Test Coverage**: 85%+
-- **Security Audits**: Regular third-party assessments
-- **Performance**: Benchmarked and optimized
-- **Documentation**: Comprehensive and up-to-date
 
 ---
 
