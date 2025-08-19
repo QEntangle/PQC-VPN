@@ -1,0 +1,158 @@
+# strongSwan IPsec configuration for PQC VPN Spoke (Client)
+# Template file - customize for each client
+# /etc/ipsec.conf
+
+config setup
+    # Enable logging
+    charondebug="ike 2, knl 2, cfg 2, net 2, asn 2, enc 2, lib 2, esp 2, tls 2"
+    
+    # Use system crypto plugins
+    load_modular = yes
+    
+    # Disable pluto (IKEv1)
+    plutostart = no
+    
+    # Unique connection identifiers
+    uniqueids = replace
+    
+    # Disable strict CRL policy for easier deployment
+    strictcrlpolicy = no
+
+# Default connection template
+conn %default
+    # IKE version
+    keyexchange = ikev2
+    
+    # Authentication method
+    authby = pubkey
+    
+    # Certificate validation
+    leftcert = CLIENT_NAME-cert.pem
+    leftkey = CLIENT_NAME-key.pem
+    leftca = ca-cert.pem
+    
+    # Post-Quantum Cryptography algorithms (must match hub)
+    ike = aes256gcm16-sha512-kyber1024!
+    esp = aes256gcm16-sha512-kyber1024!
+    
+    # Security parameters
+    dpdaction = restart
+    dpddelay = 30s
+    dpdtimeout = 150s
+    
+    # Encryption settings
+    forceencaps = yes
+    fragmentation = yes
+    rekey = yes
+    
+    # Connection settings
+    auto = start
+    type = tunnel
+    
+    # Perfect Forward Secrecy
+    pfs = yes
+    
+    # Lifetime settings
+    ikelifetime = 8h
+    keylife = 1h
+    
+    # Compression
+    compress = yes
+    
+    # Enable MOBIKE for roaming clients
+    mobike = yes
+    
+    # Close action on connection failure
+    closeaction = restart
+
+# Main connection to hub
+conn hub
+    # Inherit default settings
+    also = %default
+    
+    # Spoke (client) configuration
+    left = %defaultroute
+    leftsubnet = CLIENT_SUBNET/24
+    leftid = "C=US, O=PQC-VPN, CN=CLIENT_NAME.pqc-vpn.local"
+    leftfirewall = yes
+    
+    # Hub configuration
+    right = HUB_PUBLIC_IP
+    rightsubnet = 10.10.0.0/16
+    rightid = "C=US, O=PQC-VPN, CN=hub.pqc-vpn.local"
+    
+    # Connection settings
+    auto = start
+    type = tunnel
+    
+    # Route all traffic through VPN (optional)
+    # leftsubnet = 0.0.0.0/0
+    
+    # Mark traffic for policy routing
+    mark = 42
+    
+    # Enable NAT traversal
+    nat_traversal = yes
+    
+    # Initiate connection automatically
+    auto = start
+
+# Split tunneling configuration (optional)
+conn hub-split
+    also = %default
+    
+    # Only route specific subnets through VPN
+    left = %defaultroute
+    leftsubnet = CLIENT_SUBNET/24
+    leftid = "C=US, O=PQC-VPN, CN=CLIENT_NAME.pqc-vpn.local"
+    
+    right = HUB_PUBLIC_IP
+    rightsubnet = 10.10.0.0/16,192.168.0.0/16,172.16.0.0/12
+    rightid = "C=US, O=PQC-VPN, CN=hub.pqc-vpn.local"
+    
+    auto = ignore
+
+# Full tunnel configuration (route all traffic)
+conn hub-full
+    also = %default
+    
+    # Route all traffic through VPN
+    left = %defaultroute
+    leftsubnet = 0.0.0.0/0
+    leftid = "C=US, O=PQC-VPN, CN=CLIENT_NAME.pqc-vpn.local"
+    
+    right = HUB_PUBLIC_IP
+    rightsubnet = 0.0.0.0/0
+    rightid = "C=US, O=PQC-VPN, CN=hub.pqc-vpn.local"
+    
+    auto = ignore
+
+# Backup connection with PSK (emergency use only)
+conn hub-psk
+    # Use pre-shared key instead of certificates
+    authby = psk
+    
+    # Client configuration
+    left = %defaultroute
+    leftsubnet = CLIENT_SUBNET/24
+    leftid = CLIENT_NAME@pqc-vpn.local
+    
+    # Hub configuration
+    right = HUB_PUBLIC_IP
+    rightsubnet = 10.10.0.0/16
+    rightid = hub@pqc-vpn.local
+    
+    # PQC algorithms
+    ike = aes256gcm16-sha512-kyber1024!
+    esp = aes256gcm16-sha512-kyber1024!
+    
+    # Connection settings
+    auto = ignore
+    keyexchange = ikev2
+    dpdaction = restart
+    dpddelay = 30s
+
+# Variables to be replaced by installation script:
+# CLIENT_NAME: Unique client identifier
+# CLIENT_SUBNET: Client's assigned subnet (e.g., 10.10.1)
+# HUB_PUBLIC_IP: Public IP address of the hub server
