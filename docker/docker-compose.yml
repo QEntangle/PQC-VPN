@@ -1,0 +1,215 @@
+version: '3.8'
+
+services:
+  # PQC-VPN Hub Server
+  pqc-vpn-hub:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.hub
+    container_name: pqc-vpn-hub
+    hostname: pqc-vpn-hub
+    restart: unless-stopped
+    privileged: true
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    environment:
+      - HUB_IP=${HUB_IP:-192.168.1.100}
+      - TZ=${TZ:-UTC}
+    ports:
+      - "500:500/udp"
+      - "4500:4500/udp"
+    volumes:
+      - hub_certs:/opt/pqc-vpn/certs
+      - hub_logs:/var/log/pqc-vpn
+      - /lib/modules:/lib/modules:ro
+    networks:
+      pqc_network:
+        ipv4_address: 172.20.0.10
+    healthcheck:
+      test: ["CMD", "ipsec", "status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    labels:
+      - "com.pqc-vpn.service=hub"
+      - "com.pqc-vpn.version=1.0"
+
+  # PQC-VPN Management Web Interface (Optional)
+  pqc-vpn-web:
+    image: nginx:alpine
+    container_name: pqc-vpn-web
+    restart: unless-stopped
+    ports:
+      - "8443:443"
+      - "8080:80"
+    volumes:
+      - ./web:/usr/share/nginx/html:ro
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - hub_certs:/certs:ro
+    networks:
+      pqc_network:
+        ipv4_address: 172.20.0.11
+    depends_on:
+      - pqc-vpn-hub
+    labels:
+      - "com.pqc-vpn.service=web"
+
+  # Example Spoke Client 1
+  pqc-vpn-spoke-alice:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.spoke
+    container_name: pqc-vpn-spoke-alice
+    hostname: pqc-vpn-spoke-alice
+    restart: unless-stopped
+    privileged: true
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    environment:
+      - HUB_IP=${HUB_IP:-192.168.1.100}
+      - SPOKE_USER=alice
+      - TZ=${TZ:-UTC}
+    volumes:
+      - alice_certs:/opt/pqc-vpn/certs
+      - alice_logs:/var/log/pqc-vpn
+      - hub_certs:/certs:ro
+      - /lib/modules:/lib/modules:ro
+    networks:
+      pqc_network:
+        ipv4_address: 172.20.0.20
+    depends_on:
+      - pqc-vpn-hub
+    profiles:
+      - spokes
+    labels:
+      - "com.pqc-vpn.service=spoke"
+      - "com.pqc-vpn.user=alice"
+
+  # Example Spoke Client 2
+  pqc-vpn-spoke-bob:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.spoke
+    container_name: pqc-vpn-spoke-bob
+    hostname: pqc-vpn-spoke-bob
+    restart: unless-stopped
+    privileged: true
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    environment:
+      - HUB_IP=${HUB_IP:-192.168.1.100}
+      - SPOKE_USER=bob
+      - TZ=${TZ:-UTC}
+    volumes:
+      - bob_certs:/opt/pqc-vpn/certs
+      - bob_logs:/var/log/pqc-vpn
+      - hub_certs:/certs:ro
+      - /lib/modules:/lib/modules:ro
+    networks:
+      pqc_network:
+        ipv4_address: 172.20.0.21
+    depends_on:
+      - pqc-vpn-hub
+    profiles:
+      - spokes
+    labels:
+      - "com.pqc-vpn.service=spoke"
+      - "com.pqc-vpn.user=bob"
+
+  # Monitoring Service
+  pqc-vpn-monitor:
+    image: grafana/grafana:latest
+    container_name: pqc-vpn-monitor
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+      - GF_INSTALL_PLUGINS=grafana-piechart-panel
+    volumes:
+      - monitor_data:/var/lib/grafana
+      - ./monitoring/grafana:/etc/grafana/provisioning:ro
+    networks:
+      pqc_network:
+        ipv4_address: 172.20.0.30
+    profiles:
+      - monitoring
+    labels:
+      - "com.pqc-vpn.service=monitoring"
+
+  # Log Aggregation
+  pqc-vpn-logs:
+    image: elasticsearch:7.17.0
+    container_name: pqc-vpn-logs
+    restart: unless-stopped
+    environment:
+      - discovery.type=single-node
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+    volumes:
+      - logs_data:/usr/share/elasticsearch/data
+    networks:
+      pqc_network:
+        ipv4_address: 172.20.0.31
+    profiles:
+      - monitoring
+    labels:
+      - "com.pqc-vpn.service=logs"
+
+networks:
+  pqc_network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+          gateway: 172.20.0.1
+
+volumes:
+  # Hub volumes
+  hub_certs:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${PWD}/data/hub/certs
+  hub_logs:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${PWD}/data/hub/logs
+
+  # Spoke volumes
+  alice_certs:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${PWD}/data/spokes/alice/certs
+  alice_logs:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${PWD}/data/spokes/alice/logs
+  bob_certs:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${PWD}/data/spokes/bob/certs
+  bob_logs:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${PWD}/data/spokes/bob/logs
+
+  # Monitoring volumes
+  monitor_data:
+    driver: local
+  logs_data:
+    driver: local
