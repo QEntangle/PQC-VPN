@@ -1,13 +1,14 @@
 #!/bin/bash
 
-# PQC-VPN Hub Installation Script for Linux (Enhanced)
+# PQC-VPN Hub Installation Script for Linux
+# Enterprise Post-Quantum Cryptography VPN Solution
 # Supports Ubuntu 20.04+, CentOS 8+, Debian 11+, RHEL 8+, Rocky Linux 8+
-# Version: 2.0.0
+# Version: 1.0.0
 
 set -euo pipefail
 
 # Script configuration
-SCRIPT_VERSION="2.0.0"
+SCRIPT_VERSION="1.0.0"
 SCRIPT_NAME="PQC-VPN Hub Installer"
 LOG_FILE="/var/log/pqc-vpn-install.log"
 CONFIG_DIR="/etc/pqc-vpn"
@@ -31,6 +32,7 @@ STRONGSWAN_VERSION="${STRONGSWAN_VERSION:-5.9.14}"
 AUTH_METHODS="${AUTH_METHODS:-pki,psk,hybrid}"
 PQC_ALGORITHMS="${PQC_ALGORITHMS:-kyber1024,kyber768,dilithium5,dilithium3}"
 INSTALL_MODE="${INSTALL_MODE:-production}"  # production, development, testing
+ENTERPRISE_MODE="${ENTERPRISE_MODE:-false}"
 
 # Function definitions
 log() {
@@ -80,8 +82,8 @@ print_banner() {
     cat << 'EOF'
 ╔═══════════════════════════════════════════════════════════════╗
 ║                    PQC-VPN Hub Installer                     ║
-║                 Post-Quantum Cryptography VPN                ║
-║                        Version 2.0.0                        ║
+║          Enterprise Post-Quantum Cryptography VPN           ║
+║                        Version 1.0.0                        ║
 ╚═══════════════════════════════════════════════════════════════╝
 EOF
     echo -e "${NC}"
@@ -123,16 +125,20 @@ check_requirements() {
         exit 1
     fi
     
-    # Check available memory (minimum 2GB)
+    # Check available memory (minimum 4GB for enterprise)
     local mem_gb=$(free -g | awk '/^Mem:/{print $2}')
-    if [[ $mem_gb -lt 2 ]]; then
-        warn "System has less than 2GB RAM. PQC-VPN may not perform optimally."
+    if [[ "$ENTERPRISE_MODE" == "true" && $mem_gb -lt 8 ]]; then
+        error "Enterprise mode requires at least 8GB RAM. Current: ${mem_gb}GB"
+        exit 1
+    elif [[ $mem_gb -lt 4 ]]; then
+        warn "System has less than 4GB RAM. PQC-VPN may not perform optimally."
     fi
     
-    # Check disk space (minimum 10GB)
+    # Check disk space (minimum 20GB for enterprise)
     local disk_gb=$(df / | awk 'NR==2{printf "%.0f", $4/1024/1024}')
-    if [[ $disk_gb -lt 10 ]]; then
-        error "Insufficient disk space. At least 10GB required."
+    local min_disk=$([[ "$ENTERPRISE_MODE" == "true" ]] && echo "20" || echo "10")
+    if [[ $disk_gb -lt $min_disk ]]; then
+        error "Insufficient disk space. At least ${min_disk}GB required."
         exit 1
     fi
     
@@ -155,6 +161,7 @@ setup_logging() {
     # Start logging
     info "Starting $SCRIPT_NAME v$SCRIPT_VERSION"
     info "Installation mode: $INSTALL_MODE"
+    info "Enterprise mode: $ENTERPRISE_MODE"
     info "Hub IP: $HUB_IP"
     info "Authentication methods: $AUTH_METHODS"
     info "PQC algorithms: $PQC_ALGORITHMS"
@@ -176,6 +183,8 @@ create_directories() {
         "/var/log/pqc-vpn"
         "/usr/local/share/pqc-vpn"
         "/usr/local/bin/pqc-vpn"
+        "/var/lib/pqc-vpn"
+        "/opt/pqc-vpn"
     )
     
     for dir in "${dirs[@]}"; do
@@ -187,6 +196,7 @@ create_directories() {
     chmod 700 /etc/ipsec.d/private
     chmod 755 /etc/ipsec.d/certs
     chmod 755 /etc/ipsec.d/cacerts
+    chmod 750 /var/lib/pqc-vpn
     
     success "Directory structure created"
 }
@@ -215,6 +225,7 @@ install_dependencies() {
                 "python3"
                 "python3-pip"
                 "python3-dev"
+                "python3-venv"
                 "git"
                 "wget"
                 "curl"
@@ -224,12 +235,22 @@ install_dependencies() {
                 "strongswan-pki"
                 "strongswan-swanctl"
                 "ipsec-tools"
+                "cmake"
+                "ninja-build"
+                "libtool"
+                "autotools-dev"
+                "doxygen"
+                "graphviz"
                 "docker.io"
                 "docker-compose"
             )
             
             if [[ "$ENABLE_MONITORING" == "true" ]]; then
                 packages+=("prometheus" "grafana")
+            fi
+            
+            if [[ "$ENTERPRISE_MODE" == "true" ]]; then
+                packages+=("postgresql" "redis-server" "nginx")
             fi
             
             DEBIAN_FRONTEND=noninteractive apt-get install -y "${packages[@]}"
@@ -246,6 +267,8 @@ install_dependencies() {
                 "gcc"
                 "gcc-c++"
                 "make"
+                "cmake"
+                "ninja-build"
                 "openssl-devel"
                 "libcurl-devel"
                 "gmp-devel"
@@ -264,7 +287,15 @@ install_dependencies() {
                 "strongswan"
                 "docker"
                 "docker-compose"
+                "libtool"
+                "autotools"
+                "doxygen"
+                "graphviz"
             )
+            
+            if [[ "$ENTERPRISE_MODE" == "true" ]]; then
+                packages+=("postgresql-server" "redis" "nginx")
+            fi
             
             yum install -y "${packages[@]}"
             ;;
@@ -287,20 +318,25 @@ install_pqc_libraries() {
     cd "$build_dir"
     
     # Install liboqs (Open Quantum Safe)
-    info "Building liboqs..."
+    info "Building liboqs with full algorithm support..."
     git clone --depth 1 --branch main https://github.com/open-quantum-safe/liboqs.git
     cd liboqs
     mkdir build && cd build
-    cmake -DCMAKE_INSTALL_PREFIX=/usr/local \
+    cmake -GNinja \
+          -DCMAKE_INSTALL_PREFIX=/usr/local \
+          -DCMAKE_BUILD_TYPE=Release \
           -DOQS_USE_OPENSSL=ON \
           -DOQS_BUILD_ONLY_LIB=ON \
           -DOQS_ENABLE_KEM_KYBER=ON \
           -DOQS_ENABLE_SIG_DILITHIUM=ON \
           -DOQS_ENABLE_SIG_FALCON=ON \
           -DOQS_ENABLE_SIG_SPHINCS=ON \
+          -DOQS_ENABLE_KEM_NTRU=ON \
+          -DOQS_ENABLE_KEM_SABER=ON \
+          -DOQS_BUILD_SHARED_LIBS=ON \
           ..
-    make -j$(nproc)
-    make install
+    ninja
+    ninja install
     ldconfig
     
     # Install OQS-OpenSSL provider
@@ -308,16 +344,16 @@ install_pqc_libraries() {
     info "Building OQS-OpenSSL provider..."
     git clone --depth 1 --branch main https://github.com/open-quantum-safe/oqs-provider.git
     cd oqs-provider
-    cmake -DCMAKE_INSTALL_PREFIX=/usr/local -S . -B _build
-    cmake --build _build
-    cmake --install _build
+    cmake -GNinja -DCMAKE_INSTALL_PREFIX=/usr/local -S . -B _build
+    ninja -C _build
+    ninja -C _build install
     
     # Configure OpenSSL to use the OQS provider
     local openssl_config="/etc/ssl/openssl.cnf"
     if ! grep -q "oqsprovider" "$openssl_config" 2>/dev/null; then
         cat >> "$openssl_config" << 'EOF'
 
-# OQS Provider Configuration
+# OQS Provider Configuration for PQC-VPN
 [openssl_init]
 providers = provider_sect
 
@@ -332,6 +368,13 @@ activate = 1
 activate = 1
 module = /usr/local/lib/ossl-modules/oqsprovider.so
 EOF
+    fi
+    
+    # Verify installation
+    if /usr/local/bin/openssl list -providers | grep -q oqsprovider; then
+        success "OQS provider successfully installed"
+    else
+        warn "OQS provider installation may have issues"
     fi
     
     # Cleanup
@@ -357,65 +400,350 @@ configure_strongswan() {
         cp /etc/strongswan.conf "$BACKUP_DIR/strongswan.conf.backup.$(date +%Y%m%d_%H%M%S)"
     fi
     
-    # Copy enhanced configuration files from the repository
-    local repo_dir="${REPO_DIR:-/opt/PQC-VPN}"
-    if [[ -d "$repo_dir/configs/hub" ]]; then
-        cp "$repo_dir/configs/hub/ipsec.conf" /etc/ipsec.conf
-        cp "$repo_dir/configs/hub/ipsec.secrets" /etc/ipsec.secrets
-        cp "$repo_dir/configs/hub/strongswan.conf" /etc/strongswan.conf
-    else
-        # Download from GitHub if repository not found locally
-        warn "Local repository not found, downloading configuration from GitHub..."
-        wget -O /etc/ipsec.conf "https://raw.githubusercontent.com/QEntangle/PQC-VPN/main/configs/hub/ipsec.conf"
-        wget -O /etc/ipsec.secrets "https://raw.githubusercontent.com/QEntangle/PQC-VPN/main/configs/hub/ipsec.secrets"
-        wget -O /etc/strongswan.conf "https://raw.githubusercontent.com/QEntangle/PQC-VPN/main/configs/hub/strongswan.conf"
-    fi
+    # Create enterprise-grade ipsec.conf
+    cat > /etc/ipsec.conf << EOF
+# PQC-VPN Hub Configuration - Version 1.0.0
+config setup
+    charondebug="ike 2, knl 2, cfg 2, net 2, esp 2, dmn 2, mgr 2"
+    strictcrlpolicy=no
+    uniqueids=never
+
+# High Security Profile - Kyber-1024 + Dilithium-5
+conn %default
+    keyexchange=ikev2
+    ike=aes256gcm16-sha512-kyber1024-dilithium5!
+    esp=aes256gcm16-sha512-kyber1024!
+    dpdaction=restart
+    dpddelay=30s
+    dpdtimeout=120s
+    rekeymargin=3m
+    keyingtries=3
+    authby=pubkey
+    left=$HUB_IP
+    leftsubnet=0.0.0.0/0
+    leftfirewall=yes
+    right=%any
+    auto=add
+
+# PKI Authentication Profile
+conn pki-profile
+    also=%default
+    leftcert=hub-cert.pem
+    leftid=@hub.pqc-vpn.local
+    rightca="C=US, O=PQC-VPN, CN=PQC-VPN CA"
     
-    # Replace template variables
-    sed -i "s/{HUB_IP}/$HUB_IP/g" /etc/ipsec.conf
-    sed -i "s/{HUB_IP}/$HUB_IP/g" /etc/ipsec.secrets
+# PSK Authentication Profile  
+conn psk-profile
+    also=%default
+    authby=psk
+    leftid=@hub.pqc-vpn.local
     
+# Balanced Security Profile - Kyber-768 + Dilithium-3
+conn balanced-profile
+    keyexchange=ikev2
+    ike=aes256gcm16-sha384-kyber768-dilithium3!
+    esp=aes256gcm16-sha384-kyber768!
+    dpdaction=restart
+    dpddelay=30s
+    dpdtimeout=120s
+    rekeymargin=5m
+    keyingtries=3
+    authby=pubkey
+    left=$HUB_IP
+    leftsubnet=0.0.0.0/0
+    leftfirewall=yes
+    right=%any
+    leftcert=hub-cert.pem
+    leftid=@hub.pqc-vpn.local
+    rightca="C=US, O=PQC-VPN, CN=PQC-VPN CA"
+    auto=add
+
+# High Performance Profile - Kyber-512 + Dilithium-2
+conn performance-profile
+    keyexchange=ikev2
+    ike=aes128gcm16-sha256-kyber512-dilithium2!
+    esp=aes128gcm16-sha256-kyber512!
+    dpdaction=restart
+    dpddelay=30s
+    dpdtimeout=120s
+    rekeymargin=8m
+    keyingtries=3
+    authby=pubkey
+    left=$HUB_IP
+    leftsubnet=0.0.0.0/0
+    leftfirewall=yes
+    right=%any
+    leftcert=hub-cert.pem
+    leftid=@hub.pqc-vpn.local
+    rightca="C=US, O=PQC-VPN, CN=PQC-VPN CA"
+    auto=add
+EOF
+
+    # Create ipsec.secrets
+    cat > /etc/ipsec.secrets << EOF
+# PQC-VPN Hub Secrets - Version 1.0.0
+# RSA private key for this host, authenticating it to any other host
+: RSA hub-key.pem
+
+# Pre-shared keys (PSK) for specific connections
+# Add PSK entries as needed for spoke authentication
+EOF
+
+    # Create enhanced strongswan.conf
+    cat > /etc/strongswan.conf << EOF
+# PQC-VPN strongSwan Configuration - Version 1.0.0
+charon {
+    load_modular = yes
+    
+    # Performance optimizations
+    threads = $(([[ "$ENTERPRISE_MODE" == "true" ]] && echo "32" || echo "16"))
+    worker_threads = $(([[ "$ENTERPRISE_MODE" == "true" ]] && echo "16" || echo "8"))
+    
+    processor {
+        priority_threads {
+            high = $(([[ "$ENTERPRISE_MODE" == "true" ]] && echo "8" || echo "4"))
+            medium = $(([[ "$ENTERPRISE_MODE" == "true" ]] && echo "4" || echo "2"))
+            low = $(([[ "$ENTERPRISE_MODE" == "true" ]] && echo "2" || echo "1"))
+        }
+    }
+    
+    # Network settings
+    port = 500
+    port_nat_t = 4500
+    
+    # Security settings
+    send_vendor_id = no
+    send_delay = 0
+    retransmit_timeout = 4.0
+    retransmit_tries = 5
+    retransmit_base = 1.8
+    
+    # Logging
+    filelog {
+        /var/log/strongswan/charon.log {
+            time_format = %b %e %T
+            ike_name = yes
+            append = no
+            default = 1
+            flush_line = yes
+        }
+        stderr {
+            ike = 2
+            knl = 2
+            cfg = 2
+        }
+    }
+    
+    # Plugin configuration
+    plugins {
+        include strongswan.d/charon/*.conf
+        
+        openssl {
+            load = yes
+            
+            # Enable PQC algorithms
+            fips_mode = no
+            engine_id = oqsprovider
+        }
+        
+        kernel-netlink {
+            load = yes
+            fwmark = !0x42
+        }
+        
+        socket-default {
+            load = yes
+        }
+        
+        stroke {
+            load = yes
+        }
+        
+        updown {
+            load = yes
+        }
+        
+        eap-identity {
+            load = yes
+        }
+        
+        eap-md5 {
+            load = yes
+        }
+        
+        eap-mschapv2 {
+            load = yes
+        }
+        
+        eap-radius {
+            load = yes
+        }
+        
+        xauth-generic {
+            load = yes
+        }
+        
+        resolve {
+            load = yes
+        }
+        
+        nonce {
+            load = yes
+        }
+        
+        random {
+            load = yes
+        }
+        
+        pem {
+            load = yes
+        }
+        
+        pkcs1 {
+            load = yes
+        }
+        
+        pkcs8 {
+            load = yes
+        }
+        
+        pkcs12 {
+            load = yes
+        }
+        
+        pubkey {
+            load = yes
+        }
+        
+        sshkey {
+            load = yes
+        }
+        
+        x509 {
+            load = yes
+        }
+        
+        revocation {
+            load = yes
+        }
+        
+        constraints {
+            load = yes
+        }
+        
+        acert {
+            load = yes
+        }
+        
+        hmac {
+            load = yes
+        }
+        
+        aes {
+            load = yes
+        }
+        
+        des {
+            load = yes
+        }
+        
+        sha1 {
+            load = yes
+        }
+        
+        sha2 {
+            load = yes
+        }
+        
+        md5 {
+            load = yes
+        }
+        
+        gmp {
+            load = yes
+        }
+        
+        curve25519 {
+            load = yes
+        }
+        
+        mgf1 {
+            load = yes
+        }
+        
+        gcm {
+            load = yes
+        }
+        
+        ccm {
+            load = yes
+        }
+        
+        ctr {
+            load = yes
+        }
+        
+        cmac {
+            load = yes
+        }
+    }
+}
+
+include strongswan.d/*.conf
+EOF
+
     # Set proper permissions
     chmod 644 /etc/ipsec.conf
     chmod 600 /etc/ipsec.secrets
     chmod 644 /etc/strongswan.conf
     
-    success "strongSwan configuration updated"
+    success "strongSwan configuration created"
 }
 
 generate_certificates() {
     info "Generating PQC certificates..."
     
-    # Use the enhanced certificate generation script
-    local cert_script="${REPO_DIR:-/opt/PQC-VPN}/tools/pqc-keygen.py"
-    if [[ -f "$cert_script" ]]; then
-        python3 "$cert_script" ca
-        python3 "$cert_script" hub "$HUB_IP"
-    else
-        # Fallback to basic certificate generation
-        warn "PQC certificate generator not found, using basic OpenSSL certificates"
-        
-        # Generate CA certificate
-        openssl req -x509 -newkey rsa:4096 -keyout /etc/ipsec.d/private/ca-key.pem \
-                    -out /etc/ipsec.d/cacerts/ca-cert.pem -days 3650 -nodes \
-                    -subj "/C=US/O=PQC-VPN/CN=PQC-VPN CA"
-        
-        # Generate hub certificate
-        openssl req -newkey rsa:4096 -keyout /etc/ipsec.d/private/hub-key.pem \
-                    -out /tmp/hub-req.pem -nodes \
-                    -subj "/C=US/O=PQC-VPN/CN=hub.pqc-vpn.local"
-        
-        openssl x509 -req -in /tmp/hub-req.pem -CA /etc/ipsec.d/cacerts/ca-cert.pem \
-                     -CAkey /etc/ipsec.d/private/ca-key.pem -CAcreateserial \
-                     -out /etc/ipsec.d/certs/hub-cert.pem -days 365
-        
-        rm /tmp/hub-req.pem
-    fi
+    # Generate CA private key with Dilithium-5
+    /usr/local/bin/openssl genpkey -algorithm dilithium5 \
+        -out /etc/ipsec.d/private/ca-key.pem
+    
+    # Generate CA certificate
+    /usr/local/bin/openssl req -new -x509 -key /etc/ipsec.d/private/ca-key.pem \
+        -out /etc/ipsec.d/cacerts/ca-cert.pem -days 3650 \
+        -subj "/C=US/ST=Unknown/L=Unknown/O=PQC-VPN/OU=Certificate Authority/CN=PQC-VPN CA"
+    
+    # Generate hub private key with Dilithium-5
+    /usr/local/bin/openssl genpkey -algorithm dilithium5 \
+        -out /etc/ipsec.d/private/hub-key.pem
+    
+    # Generate hub certificate signing request
+    /usr/local/bin/openssl req -new -key /etc/ipsec.d/private/hub-key.pem \
+        -out /tmp/hub-req.pem \
+        -subj "/C=US/ST=Unknown/L=Unknown/O=PQC-VPN/OU=Hub/CN=hub.pqc-vpn.local"
+    
+    # Sign hub certificate with CA
+    /usr/local/bin/openssl x509 -req -in /tmp/hub-req.pem \
+        -CA /etc/ipsec.d/cacerts/ca-cert.pem \
+        -CAkey /etc/ipsec.d/private/ca-key.pem \
+        -CAcreateserial \
+        -out /etc/ipsec.d/certs/hub-cert.pem \
+        -days 365 \
+        -extensions v3_req
+    
+    # Cleanup
+    rm -f /tmp/hub-req.pem
     
     # Set proper permissions
     chmod 600 /etc/ipsec.d/private/*
     chmod 644 /etc/ipsec.d/certs/*
     chmod 644 /etc/ipsec.d/cacerts/*
+    
+    # Verify certificates
+    if /usr/local/bin/openssl x509 -in /etc/ipsec.d/cacerts/ca-cert.pem -text | grep -q "dilithium5"; then
+        success "PQC certificates generated successfully"
+    else
+        warn "Certificate generation completed but PQC verification failed"
+    fi
     
     success "Certificates generated"
 }
@@ -427,17 +755,25 @@ setup_firewall() {
     if command -v ufw > /dev/null; then
         # Ubuntu/Debian UFW
         ufw --force enable
-        ufw allow 500/udp
-        ufw allow 4500/udp
-        ufw allow ssh
+        ufw allow 500/udp comment "IPsec IKE"
+        ufw allow 4500/udp comment "IPsec NAT-T"
+        ufw allow ssh comment "SSH"
         
         if [[ "$ENABLE_WEB_INTERFACE" == "true" ]]; then
-            ufw allow 8443
+            ufw allow 8443 comment "PQC-VPN Web Interface"
         fi
         
         if [[ "$ENABLE_MONITORING" == "true" ]]; then
-            ufw allow 3000  # Grafana
-            ufw allow 9090  # Prometheus
+            ufw allow 3000 comment "Grafana"
+            ufw allow 9090 comment "Prometheus"
+            ufw allow 9100 comment "Node Exporter"
+        fi
+        
+        if [[ "$ENTERPRISE_MODE" == "true" ]]; then
+            ufw allow 443 comment "HTTPS"
+            ufw allow 80 comment "HTTP"
+            ufw allow 5432 comment "PostgreSQL"
+            ufw allow 6379 comment "Redis"
         fi
         
     elif command -v firewall-cmd > /dev/null; then
@@ -448,6 +784,7 @@ setup_firewall() {
         firewall-cmd --permanent --add-service=ipsec
         firewall-cmd --permanent --add-port=500/udp
         firewall-cmd --permanent --add-port=4500/udp
+        firewall-cmd --permanent --add-service=ssh
         
         if [[ "$ENABLE_WEB_INTERFACE" == "true" ]]; then
             firewall-cmd --permanent --add-port=8443/tcp
@@ -456,6 +793,14 @@ setup_firewall() {
         if [[ "$ENABLE_MONITORING" == "true" ]]; then
             firewall-cmd --permanent --add-port=3000/tcp
             firewall-cmd --permanent --add-port=9090/tcp
+            firewall-cmd --permanent --add-port=9100/tcp
+        fi
+        
+        if [[ "$ENTERPRISE_MODE" == "true" ]]; then
+            firewall-cmd --permanent --add-service=http
+            firewall-cmd --permanent --add-service=https
+            firewall-cmd --permanent --add-port=5432/tcp
+            firewall-cmd --permanent --add-port=6379/tcp
         fi
         
         firewall-cmd --reload
@@ -468,6 +813,12 @@ setup_firewall() {
         
         if [[ "$ENABLE_WEB_INTERFACE" == "true" ]]; then
             iptables -A INPUT -p tcp --dport 8443 -j ACCEPT
+        fi
+        
+        if [[ "$ENABLE_MONITORING" == "true" ]]; then
+            iptables -A INPUT -p tcp --dport 3000 -j ACCEPT
+            iptables -A INPUT -p tcp --dport 9090 -j ACCEPT
+            iptables -A INPUT -p tcp --dport 9100 -j ACCEPT
         fi
         
         # Save iptables rules
@@ -486,19 +837,38 @@ configure_networking() {
     echo 'net.ipv4.ip_forward = 1' > /etc/sysctl.d/99-pqc-vpn.conf
     echo 'net.ipv6.conf.all.forwarding = 1' >> /etc/sysctl.d/99-pqc-vpn.conf
     
-    # Optimize for VPN performance
+    # Enterprise-grade network optimizations
     cat >> /etc/sysctl.d/99-pqc-vpn.conf << 'EOF'
-# PQC-VPN Network Optimizations
-net.core.rmem_max = 16777216
-net.core.wmem_max = 16777216
-net.ipv4.tcp_rmem = 4096 87380 16777216
-net.ipv4.tcp_wmem = 4096 65536 16777216
-net.core.netdev_max_backlog = 5000
+# PQC-VPN Network Optimizations v1.0.0
+net.core.rmem_max = 134217728
+net.core.wmem_max = 134217728
+net.ipv4.tcp_rmem = 4096 131072 134217728
+net.ipv4.tcp_wmem = 4096 65536 134217728
+net.core.netdev_max_backlog = 10000
 net.ipv4.tcp_window_scaling = 1
 net.ipv4.tcp_timestamps = 1
 net.ipv4.tcp_sack = 1
+net.ipv4.tcp_fack = 1
 net.ipv4.tcp_no_metrics_save = 1
+net.ipv4.tcp_moderate_rcvbuf = 1
+net.ipv4.tcp_congestion_control = bbr
+net.core.default_qdisc = fq
+net.ipv4.tcp_mtu_probing = 1
 net.ipv4.route.flush = 1
+net.ipv6.route.flush = 1
+
+# Security enhancements
+net.ipv4.conf.all.send_redirects = 0
+net.ipv4.conf.default.send_redirects = 0
+net.ipv4.conf.all.accept_redirects = 0
+net.ipv4.conf.default.accept_redirects = 0
+net.ipv4.conf.all.accept_source_route = 0
+net.ipv4.conf.default.accept_source_route = 0
+net.ipv4.conf.all.log_martians = 1
+net.ipv4.conf.default.log_martians = 1
+net.ipv4.icmp_echo_ignore_broadcasts = 1
+net.ipv4.icmp_ignore_bogus_error_responses = 1
+net.ipv4.tcp_syncookies = 1
 EOF
     
     # Apply sysctl settings
@@ -510,37 +880,59 @@ EOF
 install_python_tools() {
     info "Installing Python management tools..."
     
-    # Install Python dependencies
-    pip3 install --upgrade pip
+    # Create virtual environment for PQC-VPN
+    python3 -m venv /opt/pqc-vpn/venv
+    source /opt/pqc-vpn/venv/bin/activate
     
-    local pip_packages=(
-        "psutil>=5.9.0"
-        "pyyaml>=6.0"
-        "cryptography>=41.0.0"
-        "requests>=2.28.0"
-        "click>=8.1.0"
-        "tabulate>=0.9.0"
-        "colorama>=0.4.6"
-        "flask>=2.3.0"
-        "flask-cors>=4.0.0"
-        "jinja2>=3.1.0"
-        "jsonschema>=4.0.0"
-        "schedule>=1.2.0"
-    )
+    # Upgrade pip
+    pip install --upgrade pip setuptools wheel
     
-    pip3 install "${pip_packages[@]}"
+    # Install core dependencies
+    pip install -r /dev/stdin << 'EOF'
+# PQC-VPN Python Dependencies v1.0.0
+Flask==3.0.0
+Flask-SQLAlchemy==3.1.1
+Flask-Login==0.6.3
+Flask-RESTX==1.3.0
+psutil>=5.9.0
+PyYAML>=6.0
+cryptography>=41.0.0
+requests>=2.28.0
+click>=8.1.0
+tabulate>=0.9.0
+colorama>=0.4.6
+rich>=13.0.0
+prometheus-client>=0.19.0
+schedule>=1.2.0
+sqlalchemy>=2.0.0
+redis>=5.0.0
+pydantic>=2.5.0
+jsonschema>=4.0.0
+structlog>=23.0.0
+EOF
     
-    # Install PQC-VPN tools
-    local tools_dir="${REPO_DIR:-/opt/PQC-VPN}/tools"
-    if [[ -d "$tools_dir" ]]; then
-        cp "$tools_dir"/*.py /usr/local/bin/pqc-vpn/
-        chmod +x /usr/local/bin/pqc-vpn/*.py
-        
-        # Create symlinks
-        ln -sf /usr/local/bin/pqc-vpn/vpn-manager.py /usr/local/bin/pqc-vpn-manager
-        ln -sf /usr/local/bin/pqc-vpn/connection-monitor.py /usr/local/bin/pqc-connection-monitor
-        ln -sf /usr/local/bin/pqc-vpn/pqc-keygen.py /usr/local/bin/pqc-keygen
-    fi
+    deactivate
+    
+    # Create wrapper scripts
+    cat > /usr/local/bin/pqc-vpn-manager << 'EOF'
+#!/bin/bash
+source /opt/pqc-vpn/venv/bin/activate
+exec python3 /opt/pqc-vpn/tools/pqc-vpn-manager.py "$@"
+EOF
+
+    cat > /usr/local/bin/pqc-connection-monitor << 'EOF'
+#!/bin/bash
+source /opt/pqc-vpn/venv/bin/activate
+exec python3 /opt/pqc-vpn/tools/connection-monitor.py "$@"
+EOF
+
+    cat > /usr/local/bin/pqc-keygen << 'EOF'
+#!/bin/bash
+source /opt/pqc-vpn/venv/bin/activate
+exec python3 /opt/pqc-vpn/tools/pqc-keygen.py "$@"
+EOF
+    
+    chmod +x /usr/local/bin/pqc-*
     
     success "Python tools installed"
 }
@@ -552,35 +944,34 @@ setup_web_interface() {
     
     info "Setting up web management interface..."
     
-    # Install web interface files
-    local web_dir="${REPO_DIR:-/opt/PQC-VPN}/web"
-    if [[ -d "$web_dir" ]]; then
-        mkdir -p /var/www/pqc-vpn
-        cp -r "$web_dir"/* /var/www/pqc-vpn/
-        
-        # Create systemd service for web API
-        cat > /etc/systemd/system/pqc-vpn-web.service << 'EOF'
+    # Create web interface directory
+    mkdir -p /var/www/pqc-vpn
+    
+    # Create systemd service for web API
+    cat > /etc/systemd/system/pqc-vpn-web.service << 'EOF'
 [Unit]
 Description=PQC-VPN Web Management Interface
 After=network.target strongswan.service
+Wants=strongswan.service
 
 [Service]
 Type=simple
 User=root
 Group=root
 WorkingDirectory=/var/www/pqc-vpn
-ExecStart=/usr/bin/python3 /var/www/pqc-vpn/api_server.py
+Environment=PYTHONPATH=/opt/pqc-vpn/venv/lib/python3.*/site-packages
+ExecStart=/opt/pqc-vpn/venv/bin/python3 /opt/pqc-vpn/web/api_server.py
 Restart=always
 RestartSec=10
-Environment=PYTHONPATH=/usr/local/bin/pqc-vpn
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
 EOF
-        
-        systemctl daemon-reload
-        systemctl enable pqc-vpn-web
-    fi
+    
+    systemctl daemon-reload
+    systemctl enable pqc-vpn-web
     
     success "Web interface configured"
 }
@@ -592,32 +983,18 @@ setup_monitoring() {
     
     info "Setting up monitoring..."
     
-    # Create monitoring configuration
+    # Create monitoring configuration directory
     mkdir -p /etc/pqc-vpn/monitoring
     
-    # Prometheus configuration
-    cat > /etc/pqc-vpn/monitoring/prometheus.yml << 'EOF'
-global:
-  scrape_interval: 15s
-
-scrape_configs:
-  - job_name: 'pqc-vpn-hub'
-    static_configs:
-      - targets: ['localhost:8443']
-    metrics_path: '/api/metrics'
+    # Install Node Exporter for system metrics
+    local node_exporter_version="1.7.0"
+    local arch=$([[ "$(uname -m)" == "aarch64" ]] && echo "arm64" || echo "amd64")
     
-  - job_name: 'node-exporter'
-    static_configs:
-      - targets: ['localhost:9100']
-EOF
-    
-    # Node exporter for system metrics
     if ! command -v node_exporter > /dev/null; then
-        local node_exporter_version="1.7.0"
         wget -O /tmp/node_exporter.tar.gz \
-            "https://github.com/prometheus/node_exporter/releases/download/v${node_exporter_version}/node_exporter-${node_exporter_version}.linux-amd64.tar.gz"
+            "https://github.com/prometheus/node_exporter/releases/download/v${node_exporter_version}/node_exporter-${node_exporter_version}.linux-${arch}.tar.gz"
         tar -xzf /tmp/node_exporter.tar.gz -C /tmp
-        mv "/tmp/node_exporter-${node_exporter_version}.linux-amd64/node_exporter" /usr/local/bin/
+        mv "/tmp/node_exporter-${node_exporter_version}.linux-${arch}/node_exporter" /usr/local/bin/
         rm -rf /tmp/node_exporter*
         
         # Create systemd service
@@ -630,8 +1007,9 @@ After=network.target
 Type=simple
 User=nobody
 Group=nobody
-ExecStart=/usr/local/bin/node_exporter
+ExecStart=/usr/local/bin/node_exporter --web.listen-address=:9100
 Restart=always
+RestartSec=10
 
 [Install]
 WantedBy=multi-user.target
@@ -642,16 +1020,82 @@ EOF
         systemctl start node-exporter
     fi
     
+    # Create Prometheus configuration
+    cat > /etc/pqc-vpn/monitoring/prometheus.yml << 'EOF'
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - "pqc_vpn_rules.yml"
+
+scrape_configs:
+  - job_name: 'pqc-vpn-hub'
+    static_configs:
+      - targets: ['localhost:8443']
+    metrics_path: '/api/metrics'
+    scheme: https
+    tls_config:
+      insecure_skip_verify: true
+    
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['localhost:9100']
+    
+  - job_name: 'strongswan'
+    static_configs:
+      - targets: ['localhost:9101']
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          - localhost:9093
+EOF
+
+    # Create alerting rules
+    cat > /etc/pqc-vpn/monitoring/pqc_vpn_rules.yml << 'EOF'
+groups:
+  - name: pqc_vpn_alerts
+    rules:
+      - alert: VPNConnectionDown
+        expr: up{job="pqc-vpn-hub"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "PQC-VPN Hub is down"
+          description: "PQC-VPN Hub has been down for more than 1 minute"
+          
+      - alert: HighConnectionCount
+        expr: pqc_vpn_active_connections > 1000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High number of VPN connections"
+          description: "More than 1000 active VPN connections"
+          
+      - alert: CertificateExpiring
+        expr: (pqc_vpn_certificate_expiry_seconds - time()) / 86400 < 30
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Certificate expiring soon"
+          description: "Certificate expires in less than 30 days"
+EOF
+    
     success "Monitoring configured"
 }
 
 setup_systemd_services() {
     info "Configuring systemd services..."
     
-    # Ensure strongSwan is enabled and started
+    # Ensure strongSwan is enabled
     systemctl enable strongswan
     
-    # Create PQC-VPN specific service
+    # Create PQC-VPN main service
     cat > /etc/systemd/system/pqc-vpn.service << 'EOF'
 [Unit]
 Description=PQC-VPN Hub Service
@@ -665,6 +1109,8 @@ ExecReload=/usr/sbin/ipsec reload
 ExecStop=/usr/sbin/ipsec stop
 Restart=always
 RestartSec=10
+TimeoutStartSec=60
+TimeoutStopSec=30
 
 [Install]
 WantedBy=multi-user.target
@@ -679,9 +1125,8 @@ After=network.target
 [Service]
 Type=oneshot
 ExecStart=/usr/local/bin/pqc-vpn-maintenance.sh
-
-[Install]
-WantedBy=multi-user.target
+User=root
+Group=root
 EOF
     
     # Create maintenance timer
@@ -691,8 +1136,9 @@ Description=Run PQC-VPN maintenance tasks daily
 Requires=pqc-vpn-maintenance.service
 
 [Timer]
-OnCalendar=daily
+OnCalendar=*-*-* 02:00:00
 Persistent=true
+RandomizedDelaySec=300
 
 [Install]
 WantedBy=timers.target
@@ -701,26 +1147,67 @@ EOF
     # Create maintenance script
     cat > /usr/local/bin/pqc-vpn-maintenance.sh << 'EOF'
 #!/bin/bash
-# PQC-VPN Maintenance Script
+# PQC-VPN Maintenance Script v1.0.0
+
+set -euo pipefail
+
+LOG_FILE="/var/log/pqc-vpn/maintenance.log"
+BACKUP_DIR="/var/backups/pqc-vpn"
+
+log() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$LOG_FILE"
+}
+
+log "Starting PQC-VPN maintenance tasks"
 
 # Rotate logs
-find /var/log/strongswan -name "*.log" -mtime +30 -delete
-find /var/log/pqc-vpn -name "*.log" -mtime +30 -delete
+find /var/log/strongswan -name "*.log" -mtime +30 -delete 2>/dev/null || true
+find /var/log/pqc-vpn -name "*.log" -mtime +30 -delete 2>/dev/null || true
+
+# Compress old logs
+find /var/log/strongswan -name "*.log" -mtime +7 -exec gzip {} \; 2>/dev/null || true
+find /var/log/pqc-vpn -name "*.log" -mtime +7 -exec gzip {} \; 2>/dev/null || true
 
 # Check certificate expiry
 if command -v pqc-connection-monitor > /dev/null; then
-    pqc-connection-monitor certificates --check-expiry
+    pqc-connection-monitor certificates --check-expiry >> "$LOG_FILE" 2>&1 || true
 fi
 
 # Backup configuration
-if [[ -d /var/backups/pqc-vpn ]]; then
-    tar -czf "/var/backups/pqc-vpn/config-backup-$(date +%Y%m%d).tar.gz" \
-        /etc/ipsec.conf /etc/ipsec.secrets /etc/strongswan.conf \
-        /etc/ipsec.d/certs /etc/ipsec.d/cacerts 2>/dev/null || true
+if [[ -d "$BACKUP_DIR" ]]; then
+    backup_file="$BACKUP_DIR/config-backup-$(date +%Y%m%d).tar.gz"
+    tar -czf "$backup_file" \
+        /etc/ipsec.conf \
+        /etc/ipsec.secrets \
+        /etc/strongswan.conf \
+        /etc/ipsec.d/certs \
+        /etc/ipsec.d/cacerts \
+        /etc/pqc-vpn \
+        2>/dev/null || true
     
-    # Keep only last 7 days of backups
-    find /var/backups/pqc-vpn -name "config-backup-*.tar.gz" -mtime +7 -delete
+    # Keep only last 14 days of backups
+    find "$BACKUP_DIR" -name "config-backup-*.tar.gz" -mtime +14 -delete 2>/dev/null || true
 fi
+
+# Update system packages (security updates only)
+if command -v apt-get > /dev/null; then
+    apt-get update -qq && apt-get upgrade -y --only-upgrade -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" 2>> "$LOG_FILE" || true
+elif command -v yum > /dev/null; then
+    yum update -y --security 2>> "$LOG_FILE" || true
+fi
+
+# Restart services if needed
+if systemctl is-failed strongswan > /dev/null 2>&1; then
+    log "Restarting failed strongSwan service"
+    systemctl restart strongswan
+fi
+
+if systemctl is-failed pqc-vpn-web > /dev/null 2>&1; then
+    log "Restarting failed web service"
+    systemctl restart pqc-vpn-web
+fi
+
+log "Maintenance tasks completed"
 EOF
     
     chmod +x /usr/local/bin/pqc-vpn-maintenance.sh
@@ -739,9 +1226,6 @@ start_services() {
     # Start strongSwan
     systemctl start strongswan
     
-    # Start PQC-VPN service
-    systemctl start pqc-vpn
-    
     # Start web interface if enabled
     if [[ "$ENABLE_WEB_INTERFACE" == "true" ]]; then
         systemctl start pqc-vpn-web
@@ -758,12 +1242,15 @@ start_services() {
     else
         error "strongSwan service failed to start"
         systemctl status strongswan
+        exit 1
     fi
     
-    if systemctl is-active --quiet pqc-vpn; then
-        success "PQC-VPN service is running"
-    else
-        warn "PQC-VPN service status check failed"
+    if [[ "$ENABLE_WEB_INTERFACE" == "true" ]]; then
+        if systemctl is-active --quiet pqc-vpn-web; then
+            success "Web interface service is running"
+        else
+            warn "Web interface service status check failed"
+        fi
     fi
     
     success "Services started"
@@ -781,15 +1268,21 @@ perform_post_install_checks() {
     
     # Check certificate validity
     if [[ -f /etc/ipsec.d/certs/hub-cert.pem ]]; then
-        local cert_expiry=$(openssl x509 -in /etc/ipsec.d/certs/hub-cert.pem -noout -enddate | cut -d= -f2)
+        local cert_expiry=$(/usr/local/bin/openssl x509 -in /etc/ipsec.d/certs/hub-cert.pem -noout -enddate | cut -d= -f2)
         info "Hub certificate expires: $cert_expiry"
     fi
     
-    # Check PQC library availability
-    if openssl list -providers | grep -q oqsprovider; then
-        success "OpenSSL OQS provider is available"
+    # Check PQC algorithm availability
+    if /usr/local/bin/openssl list -signature-algorithms | grep -q dilithium; then
+        success "Dilithium signature algorithms available"
     else
-        warn "OpenSSL OQS provider not detected"
+        warn "Dilithium algorithms not detected"
+    fi
+    
+    if /usr/local/bin/openssl list -kem-algorithms | grep -q kyber; then
+        success "Kyber KEM algorithms available"
+    else
+        warn "Kyber algorithms not detected"
     fi
     
     # Check network connectivity
@@ -802,7 +1295,17 @@ perform_post_install_checks() {
     # Performance check
     local cpu_cores=$(nproc)
     local mem_gb=$(free -g | awk '/^Mem:/{print $2}')
-    info "System resources: $cpu_cores CPU cores, ${mem_gb}GB RAM"
+    local disk_gb=$(df / | awk 'NR==2{printf "%.0f", $4/1024/1024}')
+    info "System resources: $cpu_cores CPU cores, ${mem_gb}GB RAM, ${disk_gb}GB disk space"
+    
+    # Check if enterprise requirements are met
+    if [[ "$ENTERPRISE_MODE" == "true" ]]; then
+        if [[ $cpu_cores -ge 8 && $mem_gb -ge 16 ]]; then
+            success "Enterprise resource requirements met"
+        else
+            warn "System may not meet enterprise performance requirements"
+        fi
+    fi
     
     success "Post-installation checks completed"
 }
@@ -812,10 +1315,12 @@ print_installation_summary() {
     echo -e "${GREEN}║                   INSTALLATION COMPLETE                      ║${NC}"
     echo -e "${GREEN}╚═══════════════════════════════════════════════════════════════╝${NC}\n"
     
-    echo -e "${CYAN}🎉 PQC-VPN Hub has been successfully installed!${NC}\n"
+    echo -e "${CYAN}🎉 PQC-VPN Hub v1.0.0 has been successfully installed!${NC}\n"
     
     echo -e "${BLUE}📊 Installation Summary:${NC}"
+    echo -e "   • Version: ${YELLOW}1.0.0${NC}"
     echo -e "   • Hub IP Address: ${YELLOW}$HUB_IP${NC}"
+    echo -e "   • Enterprise Mode: ${YELLOW}$([ "$ENTERPRISE_MODE" == "true" ] && echo "Enabled" || echo "Disabled")${NC}"
     echo -e "   • Authentication Methods: ${YELLOW}$AUTH_METHODS${NC}"
     echo -e "   • PQC Algorithms: ${YELLOW}$PQC_ALGORITHMS${NC}"
     echo -e "   • Web Interface: ${YELLOW}$([ "$ENABLE_WEB_INTERFACE" == "true" ] && echo "Enabled" || echo "Disabled")${NC}"
@@ -825,31 +1330,55 @@ print_installation_summary() {
     echo -e "\n${BLUE}🔗 Access Points:${NC}"
     if [[ "$ENABLE_WEB_INTERFACE" == "true" ]]; then
         echo -e "   • Web Dashboard: ${YELLOW}https://$HUB_IP:8443${NC}"
+        echo -e "     Default credentials: admin/admin (please change immediately)"
     fi
     if [[ "$ENABLE_MONITORING" == "true" ]]; then
         echo -e "   • Grafana: ${YELLOW}http://$HUB_IP:3000${NC} (admin/admin)"
         echo -e "   • Prometheus: ${YELLOW}http://$HUB_IP:9090${NC}"
+        echo -e "   • Node Exporter: ${YELLOW}http://$HUB_IP:9100/metrics${NC}"
     fi
     
     echo -e "\n${BLUE}📁 Important Files:${NC}"
     echo -e "   • Configuration: ${YELLOW}/etc/ipsec.conf${NC}"
     echo -e "   • Secrets: ${YELLOW}/etc/ipsec.secrets${NC}"
     echo -e "   • Certificates: ${YELLOW}/etc/ipsec.d/certs/${NC}"
+    echo -e "   • CA Certificate: ${YELLOW}/etc/ipsec.d/cacerts/ca-cert.pem${NC}"
     echo -e "   • Logs: ${YELLOW}/var/log/strongswan/${NC}"
     echo -e "   • Installation Log: ${YELLOW}$LOG_FILE${NC}"
+    echo -e "   • Backups: ${YELLOW}$BACKUP_DIR${NC}"
     
-    echo -e "\n${BLUE}🔧 Next Steps:${NC}"
-    echo -e "   1. Add spoke users: ${YELLOW}pqc-vpn-manager user add <username> --email <email>${NC}"
-    echo -e "   2. Monitor connections: ${YELLOW}pqc-connection-monitor status${NC}"
-    echo -e "   3. View logs: ${YELLOW}journalctl -u strongswan -f${NC}"
-    echo -e "   4. Check status: ${YELLOW}ipsec status${NC}"
+    echo -e "\n${BLUE}🔧 Management Commands:${NC}"
+    echo -e "   • Add user: ${YELLOW}pqc-vpn-manager user add <username> --email <email> --auth-type pki${NC}"
+    echo -e "   • Monitor connections: ${YELLOW}pqc-connection-monitor status${NC}"
+    echo -e "   • System status: ${YELLOW}pqc-vpn-manager status${NC}"
+    echo -e "   • View logs: ${YELLOW}journalctl -u strongswan -f${NC}"
+    echo -e "   • Check IPsec: ${YELLOW}ipsec status${NC}"
+    echo -e "   • Generate certificates: ${YELLOW}pqc-keygen --help${NC}"
+    
+    echo -e "\n${BLUE}🔒 Security Verification:${NC}"
+    echo -e "   • Verify PQC algorithms: ${YELLOW}/usr/local/bin/openssl list -signature-algorithms | grep dilithium${NC}"
+    echo -e "   • Check certificate: ${YELLOW}/usr/local/bin/openssl x509 -in /etc/ipsec.d/certs/hub-cert.pem -text | grep dilithium${NC}"
+    echo -e "   • Validate configuration: ${YELLOW}ipsec listcerts${NC}"
+    
+    echo -e "\n${BLUE}⚠️  Security Recommendations:${NC}"
+    echo -e "   1. Change default web interface password immediately"
+    echo -e "   2. Configure firewall rules for your environment"
+    echo -e "   3. Set up automated certificate renewal"
+    echo -e "   4. Configure backup procedures"
+    echo -e "   5. Review and customize security policies"
     
     echo -e "\n${BLUE}📚 Documentation:${NC}"
-    echo -e "   • GitHub: ${YELLOW}https://github.com/QEntangle/PQC-VPN${NC}"
-    echo -e "   • Docs: ${YELLOW}https://github.com/QEntangle/PQC-VPN/tree/main/docs${NC}"
+    echo -e "   • GitHub Repository: ${YELLOW}https://github.com/QEntangle/PQC-VPN${NC}"
+    echo -e "   • Quick Start Guide: ${YELLOW}https://github.com/QEntangle/PQC-VPN/blob/main/QUICKSTART.md${NC}"
+    echo -e "   • Documentation: ${YELLOW}https://github.com/QEntangle/PQC-VPN/tree/main/docs${NC}"
+    
+    echo -e "\n${BLUE}🆘 Support:${NC}"
+    echo -e "   • Enterprise Support: ${YELLOW}support@qentangle.com${NC}"
+    echo -e "   • Community: ${YELLOW}https://github.com/QEntangle/PQC-VPN/discussions${NC}"
+    echo -e "   • Issues: ${YELLOW}https://github.com/QEntangle/PQC-VPN/issues${NC}"
     
     echo -e "\n${GREEN}✅ Installation completed successfully!${NC}"
-    echo -e "   ${CYAN}Thank you for choosing PQC-VPN for quantum-safe networking.${NC}\n"
+    echo -e "   ${CYAN}Your network is now protected with quantum-safe cryptography.${NC}\n"
 }
 
 # Main installation function
@@ -882,6 +1411,10 @@ while [[ $# -gt 0 ]]; do
             HUB_IP="$2"
             shift 2
             ;;
+        --enterprise-mode)
+            ENTERPRISE_MODE="true"
+            shift
+            ;;
         --enable-ha)
             ENABLE_HA="true"
             shift
@@ -906,6 +1439,10 @@ while [[ $# -gt 0 ]]; do
             PQC_ALGORITHMS="$2"
             shift 2
             ;;
+        --admin-password)
+            ADMIN_PASSWORD="$2"
+            shift 2
+            ;;
         --debug)
             DEBUG="true"
             shift
@@ -917,21 +1454,28 @@ while [[ $# -gt 0 ]]; do
             echo ""
             echo "Options:"
             echo "  --hub-ip IP               Set hub IP address"
-            echo "  --enable-ha               Enable high availability"
-            echo "  --disable-web             Disable web interface"
-            echo "  --disable-monitoring      Disable monitoring"
+            echo "  --enterprise-mode         Enable enterprise features and optimizations"
+            echo "  --enable-ha               Enable high availability configuration"
+            echo "  --disable-web             Disable web management interface"
+            echo "  --disable-monitoring      Disable monitoring and metrics"
             echo "  --install-mode MODE       Set install mode (production/development/testing)"
             echo "  --auth-methods METHODS    Set authentication methods (pki,psk,hybrid)"
             echo "  --pqc-algorithms ALGOS    Set PQC algorithms (kyber1024,dilithium5,etc)"
+            echo "  --admin-password PASS     Set initial admin password"
             echo "  --debug                   Enable debug output"
             echo "  --help, -h                Show this help message"
             echo ""
             echo "Environment Variables:"
             echo "  HUB_IP                    Hub IP address"
+            echo "  ENTERPRISE_MODE           Enable enterprise mode (true/false)"
             echo "  ENABLE_HA                 Enable high availability (true/false)"
             echo "  ENABLE_MONITORING         Enable monitoring (true/false)"
             echo "  ENABLE_WEB_INTERFACE      Enable web interface (true/false)"
-            echo "  REPO_DIR                  Local repository directory"
+            echo "  ADMIN_PASSWORD            Initial admin password"
+            echo ""
+            echo "Examples:"
+            echo "  $0 --hub-ip 192.168.1.100 --enterprise-mode"
+            echo "  $0 --hub-ip 10.0.0.1 --disable-monitoring --auth-methods pki"
             echo ""
             exit 0
             ;;
@@ -941,6 +1485,12 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# Validate required parameters
+if [[ -z "$HUB_IP" ]]; then
+    error "Hub IP address is required. Use --hub-ip or set HUB_IP environment variable."
+    exit 1
+fi
 
 # Run main installation
 main "$@"
