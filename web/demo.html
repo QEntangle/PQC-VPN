@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PQC-VPN Demo Dashboard</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; }
+        .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+        .header { text-align: center; color: white; margin-bottom: 30px; }
+        .header h1 { font-size: 2.5em; margin-bottom: 10px; }
+        .dashboard { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
+        .card { background: white; border-radius: 15px; padding: 25px; box-shadow: 0 8px 25px rgba(0,0,0,0.1); }
+        .card h3 { color: #2c3e50; margin-bottom: 15px; font-size: 1.3em; }
+        .status-online { background: #2ecc71; color: white; padding: 10px 20px; border-radius: 25px; text-align: center; margin: 10px 0; }
+        .metric { background: #f8f9fa; padding: 15px; margin: 10px 0; border-radius: 8px; border-left: 4px solid #3498db; }
+        .feature-list { list-style: none; }
+        .feature-list li { padding: 8px 0; color: #27ae60; }
+        .feature-list li:before { content: "✅ "; margin-right: 10px; }
+        .link-button { display: inline-block; background: #3498db; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; margin: 5px; transition: background 0.3s; }
+        .link-button:hover { background: #2980b9; }
+        .stats-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; }
+        .stat-item { text-align: center; background: #ecf0f1; padding: 15px; border-radius: 8px; }
+        .stat-number { font-size: 2em; font-weight: bold; color: #2c3e50; }
+        .stat-label { color: #7f8c8d; font-size: 0.9em; }
+        .demo-info { background: #fff3cd; border: 1px solid #ffeaa7; padding: 15px; border-radius: 8px; margin: 15px 0; }
+        .connection-item { background: #e8f5e8; padding: 12px; margin: 8px 0; border-radius: 6px; border-left: 4px solid #27ae60; }
+        .algorithm-badge { background: #3498db; color: white; padding: 4px 8px; border-radius: 4px; font-size: 0.8em; margin: 2px; display: inline-block; }
+        .chart-container { height: 200px; background: #f8f9fa; border-radius: 8px; padding: 20px; margin: 15px 0; display: flex; align-items: center; justify-content: center; }
+        .terminal { background: #2c3e50; color: #ecf0f1; padding: 15px; border-radius: 8px; font-family: 'Courier New', monospace; font-size: 0.9em; margin: 15px 0; max-height: 200px; overflow-y: auto; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔐 PQC-VPN Demo Dashboard</h1>
+            <p>Post-Quantum Cryptography VPN Solution v2.0.0</p>
+        </div>
+        
+        <div class="dashboard">
+            <div class="card">
+                <h3>🚀 System Status</h3>
+                <div class="status-online" id="status">✅ All Systems Operational</div>
+                <div class="metric">
+                    <strong>Hub IP:</strong> <span id="hub-ip">192.168.0.103</span><br>
+                    <strong>Uptime:</strong> <span id="uptime">Starting...</span><br>
+                    <strong>Version:</strong> PQC-VPN v2.0.0<br>
+                    <strong>Engine:</strong> strongSwan 5.9+
+                </div>
+            </div>
+            
+            <div class="card">
+                <h3>🔐 Security Configuration</h3>
+                <ul class="feature-list">
+                    <li>Kyber-1024 Key Exchange</li>
+                    <li>Dilithium-5 Digital Signatures</li>
+                    <li>AES-256-GCM Encryption</li>
+                    <li>PKI + PSK Hybrid Auth</li>
+                    <li>Perfect Forward Secrecy</li>
+                </ul>
+                <div class="metric">
+                    <strong>PQC Algorithms:</strong><br>
+                    <span class="algorithm-badge">Kyber-1024</span>
+                    <span class="algorithm-badge">Dilithium-5</span>
+                    <span class="algorithm-badge">AES-256-GCM</span>
+                </div>
+            </div>
+            
+            <div class="card">
+                <h3>📊 Connection Statistics</h3>
+                <div class="stats-grid">
+                    <div class="stat-item">
+                        <div class="stat-number" id="total-connections">0</div>
+                        <div class="stat-label">Total Connections</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-number" id="pqc-connections">0</div>
+                        <div class="stat-label">PQC Connections</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-number" id="data-transfer">0 MB</div>
+                        <div class="stat-label">Data Transferred</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-number" id="success-rate">100%</div>
+                        <div class="stat-label">Success Rate</div>
+                    </div>
+                </div>
+                <div class="chart-container" id="connection-chart">
+                    📈 Connection Activity Chart
+                    <br><small>Real-time connection monitoring</small>
+                </div>
+            </div>
+            
+            <div class="card">
+                <h3>🌐 Active Connections</h3>
+                <div id="active-connections">
+                    <div class="connection-item">
+                        <strong>Demo Connection:</strong> pqc-psk-demo<br>
+                        <small>Status: Ready | Auth: PSK | Algorithm: AES-256-GCM</small>
+                    </div>
+                    <div class="connection-item">
+                        <strong>PKI Demo:</strong> pqc-pki-demo<br>
+                        <small>Status: Ready | Auth: Certificate | Algorithm: AES-256-GCM</small>
+                    </div>
+                    <div class="connection-item">
+                        <strong>Hybrid Demo:</strong> pqc-hybrid-demo<br>
+                        <small>Status: Ready | Auth: PKI+PSK | Algorithm: AES-256-GCM</small>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="card">
+                <h3>🛠️ Management Tools</h3>
+                <a href="http://localhost:8443" class="link-button">🏠 Hub Status</a>
+                <a href="http://localhost:3000" class="link-button">📈 Grafana</a>
+                <a href="http://localhost:9090" class="link-button">📊 Prometheus</a>
+                <a href="#" onclick="showVPNStatus()" class="link-button">🔍 VPN Status</a>
+                <a href="#" onclick="showDemo()" class="link-button">🎭 Demo Mode</a>
+                <div class="metric">
+                    <strong>Default Credentials:</strong><br>
+                    Grafana: admin / admin<br>
+                    Demo PSK: pqc-demo-key-2025-secure
+                </div>
+            </div>
+            
+            <div class="card">
+                <h3>🎯 Demo Features</h3>
+                <ul class="feature-list">
+                    <li>Post-Quantum Cryptography Ready</li>
+                    <li>Multiple Authentication Methods</li>
+                    <li>Real-time Monitoring Dashboard</li>
+                    <li>Container-based Deployment</li>
+                    <li>Enterprise High Availability</li>
+                    <li>Automated Certificate Management</li>
+                    <li>Performance Analytics</li>
+                    <li>Security Compliance Reporting</li>
+                </ul>
+            </div>
+            
+            <div class="card">
+                <h3>💻 Quick Commands</h3>
+                <div class="terminal" id="terminal">
+                    <div>$ docker-compose ps</div>
+                    <div>pqc-vpn-hub     Up (healthy)</div>
+                    <div>grafana         Up (healthy)</div>
+                    <div>prometheus      Up (healthy)</div>
+                    <div>$ ipsec status</div>
+                    <div>Security Associations (3 up, 0 connecting):</div>
+                    <div>pqc-psk-demo[1]: ESTABLISHED</div>
+                    <div>pqc-pki-demo[2]: ESTABLISHED</div>
+                    <div>$ echo "PQC-VPN Demo Ready!"</div>
+                </div>
+                <button onclick="runCommand()" class="link-button">🔄 Refresh Status</button>
+            </div>
+            
+            <div class="card">
+                <h3>📈 Performance Metrics</h3>
+                <div class="metric">
+                    <strong>Throughput:</strong> <span id="throughput">85.4 Mbps</span><br>
+                    <strong>Latency:</strong> <span id="latency">2.3 ms</span><br>
+                    <strong>Packet Loss:</strong> <span id="packet-loss">0.01%</span><br>
+                    <strong>CPU Usage:</strong> <span id="cpu-usage">12%</span><br>
+                    <strong>Memory Usage:</strong> <span id="memory-usage">1.2 GB</span>
+                </div>
+                <div class="chart-container">
+                    📊 Performance Trend Graph
+                    <br><small>CPU, Memory, Network utilization</small>
+                </div>
+            </div>
+        </div>
+        
+        <div class="demo-info">
+            <h3>🎭 Demo Information</h3>
+            <p><strong>Purpose:</strong> This dashboard demonstrates PQC-VPN v2.0.0 capabilities including post-quantum cryptography, hybrid authentication, and enterprise management features.</p>
+            <p><strong>Demo Features:</strong> Real-time monitoring, multiple authentication methods, container deployment, and quantum-safe encryption algorithms.</p>
+            <p><strong>Production Note:</strong> For production deployment, ensure proper certificate management, secure key storage, and regular security audits.</p>
+        </div>
+    </div>
+    
+    <script>
+        let startTime = Date.now();
+        let connectionCount = 0;
+        let dataTransferred = 0;
+        
+        function updateDashboard() {
+            // Update uptime
+            const uptime = Math.floor((Date.now() - startTime) / 1000);
+            const hours = Math.floor(uptime / 3600);
+            const minutes = Math.floor((uptime % 3600) / 60);
+            const seconds = uptime % 60;
+            document.getElementById('uptime').textContent = `${hours}h ${minutes}m ${seconds}s`;
+            
+            // Simulate connection activity
+            connectionCount = Math.floor(Math.random() * 5) + 1;
+            const pqcConnections = Math.floor(connectionCount * 0.8);
+            dataTransferred += Math.floor(Math.random() * 10) + 5;
+            
+            document.getElementById('total-connections').textContent = connectionCount;
+            document.getElementById('pqc-connections').textContent = pqcConnections;
+            document.getElementById('data-transfer').textContent = `${dataTransferred} MB`;
+            
+            // Update performance metrics
+            document.getElementById('throughput').textContent = `${(Math.random() * 20 + 80).toFixed(1)} Mbps`;
+            document.getElementById('latency').textContent = `${(Math.random() * 2 + 1).toFixed(1)} ms`;
+            document.getElementById('packet-loss').textContent = `${(Math.random() * 0.1).toFixed(3)}%`;
+            document.getElementById('cpu-usage').textContent = `${Math.floor(Math.random() * 10 + 8)}%`;
+            document.getElementById('memory-usage').textContent = `${(Math.random() * 0.5 + 1).toFixed(1)} GB`;
+            
+            // Update status with timestamp
+            document.getElementById('status').textContent = '✅ All Systems Operational - ' + new Date().toLocaleTimeString();
+        }
+        
+        function showVPNStatus() {
+            alert(`VPN Status Report:
+
+🔐 strongSwan Status: ACTIVE
+📡 Hub IP: 192.168.0.103
+🌐 Available Connections: 3
+👥 Active Users: ${connectionCount}
+🔑 Authentication: PKI + PSK Hybrid
+🛡️ Encryption: AES-256-GCM + PQC-Ready
+⏱️ Uptime: ${document.getElementById('uptime').textContent}
+
+Connection Profiles:
+• pqc-psk-demo: PSK Authentication
+• pqc-pki-demo: Certificate Authentication  
+• pqc-hybrid-demo: PKI + PSK Combined
+
+Ready for quantum-safe communications!`);
+        }
+        
+        function showDemo() {
+            alert(`🎭 PQC-VPN Demo Mode
+
+This interactive demonstration showcases:
+
+🔐 Post-Quantum Cryptography:
+   • Kyber-1024 key exchange
+   • Dilithium-5 digital signatures
+   • Future-proof against quantum attacks
+
+🛡️ Enterprise Security:
+   • Multi-factor authentication
+   • Certificate lifecycle management
+   • Real-time threat monitoring
+
+📊 Management Features:
+   • Web-based dashboard
+   • Performance analytics
+   • Automated reporting
+
+🚀 Deployment Options:
+   • Docker containers
+   • Kubernetes orchestration  
+   • High availability clustering
+
+Ready to deploy quantum-safe VPN infrastructure!`);
+        }
+        
+        function runCommand() {
+            const terminal = document.getElementById('terminal');
+            const commands = [
+                '$ docker exec pqc-vpn-hub ipsec status',
+                'Security Associations (' + connectionCount + ' up, 0 connecting):',
+                'pqc-psk-demo[1]: ESTABLISHED 10.10.1.0/24',
+                'pqc-pki-demo[2]: ESTABLISHED 10.10.2.0/24',
+                '$ strongswan version',
+                'strongSwan 5.9.14 with PQC extensions',
+                '$ echo "Status: All systems operational"',
+                'Status: All systems operational',
+                '$ date',
+                new Date().toLocaleString()
+            ];
+            
+            terminal.innerHTML = commands.map(cmd => `<div>${cmd}</div>`).join('');
+        }
+        
+        // Auto-update every 5 seconds
+        setInterval(updateDashboard, 5000);
+        
+        // Initialize
+        updateDashboard();
+        
+        // Welcome message
+        setTimeout(() => {
+            if (confirm('🎉 Welcome to PQC-VPN v2.0.0 Demo!\n\nWould you like a quick tour of the features?')) {
+                showDemo();
+            }
+        }, 2000);
+    </script>
+</body>
+</html>
