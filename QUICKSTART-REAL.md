@@ -193,7 +193,8 @@ docker exec pqc-spoke-alice iperf3 -s -p 5001 &
 # Test bandwidth from Charlie to Alice
 docker exec pqc-spoke-charlie iperf3 -c 172.20.1.10 -p 5001 -t 30
 
-# Results will show real encrypted throughput with PQC overhead
+# Results will show encrypted throughput with PQC
+# Performance will vary based on hardware and network conditions
 ```
 
 ### Security Verification
@@ -242,7 +243,7 @@ sudo python3 tools/pqc-vpn-manager.py metrics
 Edit `/etc/ipsec.conf` to change algorithms:
 
 ```ini
-# High Security (slower)
+# High Security (may impact performance)
 ike=aes256gcm16-sha512-kyber1024-dilithium5!
 esp=aes256gcm16-sha512-kyber1024!
 
@@ -309,25 +310,36 @@ sudo ufw allow 500/udp
 sudo ufw allow 4500/udp
 ```
 
-## 📈 Performance Expectations
+## 📈 Performance Considerations
 
-### PQC Algorithm Overhead
+### PQC Algorithm Characteristics
 
-| Algorithm | Key Size | Signature Size | Performance Impact |
-|-----------|----------|----------------|-------------------|
-| Kyber-512 | 800 bytes | - | +5-10% latency |
-| Kyber-768 | 1,184 bytes | - | +10-15% latency |
-| Kyber-1024 | 1,568 bytes | - | +15-20% latency |
-| Dilithium-2 | 1,312 bytes | 2,420 bytes | +5-10% overhead |
-| Dilithium-3 | 1,952 bytes | 3,293 bytes | +10-15% overhead |
-| Dilithium-5 | 2,592 bytes | 4,595 bytes | +15-25% overhead |
+| Algorithm | Key Size | Signature Size | Notes |
+|-----------|----------|----------------|-------|
+| Kyber-512 | 800 bytes | - | Fastest PQC option |
+| Kyber-768 | 1,184 bytes | - | Balanced security/performance |
+| Kyber-1024 | 1,568 bytes | - | Highest security |
+| Dilithium-2 | 1,312 bytes | 2,420 bytes | Compact signatures |
+| Dilithium-3 | 1,952 bytes | 3,293 bytes | Balanced option |
+| Dilithium-5 | 2,592 bytes | 4,595 bytes | Maximum security |
 
-### Expected Throughput
+### Performance Impact
 
-- **Gigabit Network**: 800-900 Mbps with PQC
-- **100 Mbps Network**: 90-95 Mbps with PQC  
-- **Concurrent Users**: 1000+ with 4 CPU cores
-- **Memory Usage**: ~2MB per active connection
+⚠️ **Post-quantum algorithms have computational overhead compared to classical cryptography.**
+
+- **CPU Usage**: PQC algorithms are more computationally intensive
+- **Memory Usage**: Larger key sizes require more memory
+- **Network Overhead**: Larger certificates and signatures increase packet sizes
+- **Connection Establishment**: Initial handshake may take longer
+
+**Recommendation**: Test performance in your specific environment before production deployment.
+
+### Optimization Tips
+
+- Use **Kyber-512** for environments prioritizing performance
+- Use **Kyber-1024** for maximum security requirements
+- Monitor CPU and memory usage during peak loads
+- Consider hardware acceleration if available
 
 ## 🔒 Security Best Practices
 
@@ -358,8 +370,8 @@ sudo apt update && sudo apt upgrade
 # Set up log rotation
 sudo logrotate -f /etc/logrotate.d/strongswan
 
-# Monitor for quantum threats
-sudo python3 tools/pqc-vpn-manager.py quantum-threat-monitor
+# Monitor certificate expiry
+sudo python3 tools/pqc-vpn-manager.py cert check-expiry
 ```
 
 ## 🎯 What You Get
@@ -368,10 +380,9 @@ sudo python3 tools/pqc-vpn-manager.py quantum-threat-monitor
 ✅ **Real Dilithium-5 digital signatures** (not simulated)  
 ✅ **Actual quantum-safe network traffic**  
 ✅ **Enterprise-grade management interface**  
-✅ **Real-time monitoring with actual metrics**  
-✅ **Production-ready scalability**  
+✅ **Real-time monitoring capabilities**  
 ✅ **Cross-platform compatibility**  
-✅ **High availability support**  
+✅ **Production-ready foundation**  
 
 ## ❌ What This Is NOT
 
@@ -387,15 +398,15 @@ You'll know it's working when:
 1. **Algorithm Check**: `openssl list -signature-algorithms` shows dilithium
 2. **Certificate Check**: CA cert shows "Signature Algorithm: dilithium5"  
 3. **Connection Check**: `ipsec statusall` shows kyber/dilithium in use
-4. **Dashboard Check**: Real metrics update every 30 seconds
-5. **Traffic Check**: Packet inspection shows PQC key exchange
+4. **Dashboard Check**: Monitoring interface shows active connections
+5. **Traffic Check**: VPN tunnels are established and routing traffic
 
 ## 📞 Support
 
 - **Technical Issues**: Check troubleshooting guide first
-- **Performance Questions**: See performance tuning section
-- **Enterprise Support**: Contact for professional services
+- **Performance Questions**: Test in your specific environment
 - **Security Questions**: Review security best practices
+- **Community**: Use GitHub discussions for community support
 
 ---
 
