@@ -9,6 +9,51 @@
 
 **Enterprise-grade VPN solution implementing NIST-standardized Post-Quantum Cryptography algorithms for quantum-resistant secure communications.**
 
+---
+
+## 🎯 **FIXED DEMO SETUP - READY TO USE!**
+
+### ⚡ **One-Command Demo Setup (Recommended)**
+
+```bash
+git clone https://github.com/QEntangle/PQC-VPN.git
+cd PQC-VPN
+chmod +x setup-demo.sh
+./setup-demo.sh
+```
+
+**✅ What you get in 5 minutes:**
+- 🖥️ **One PQC-VPN Hub Server** with Post-Quantum Crypto
+- 👥 **Three Demo Clients** (2 PKI + 1 PSK authentication)
+- 🌐 **Web Management Interface** at https://localhost:8443
+- 📊 **Monitoring Dashboard** at http://localhost:13000
+- 📁 **Client Configuration Files** ready for distribution
+
+### 🔧 **Fixed Production Issues**
+- ✅ **Build Context Fixed**: Resolved Docker Compose build errors
+- ✅ **Port Conflicts Fixed**: Non-conflicting ports (PostgreSQL: 15432, Redis: 16379, etc.)
+- ✅ **Missing Dependencies Fixed**: All required configurations included
+- ✅ **Environment Issues Fixed**: Clear .env setup with secure defaults
+
+### 📋 **Alternative Setup Options**
+
+| **Method** | **Use Case** | **Command** |
+|------------|-------------|-------------|
+| **One-Command Demo** | Quick demonstration | `./setup-demo.sh` |
+| **Production Setup** | Enterprise deployment | `./start-pqc-vpn.sh --with-monitoring` |
+| **Manual Setup** | Custom configuration | See [DEMO-SETUP-FIXED.md](DEMO-SETUP-FIXED.md) |
+
+### 🎭 **Demo Access Information**
+After running the demo setup:
+- **Web Interface**: https://localhost:8443 (admin / DemoAdmin123!)
+- **Grafana Monitoring**: http://localhost:13000 (admin / DemoGrafana123!)
+- **API Endpoint**: https://localhost:9090
+- **Client Configs**: `./demo-client-configs/`
+
+📖 **[Complete Demo Guide →](DEMO-SETUP-FIXED.md)**
+
+---
+
 ## 🎯 Enterprise Features
 
 ### Core Security
@@ -133,7 +178,7 @@ sudo ./scripts/install-hub-linux.sh --hub-ip YOUR_IP --enterprise-mode
 ### Supported Algorithms
 
 | **Algorithm** | **Type** | **NIST Level** | **Key Size** | **Use Case** |
-|---------------|----------|----------------|--------------|--------------|
+|---------------|----------|----------------|--------------|--------------| 
 | **Kyber-1024** | KEM | 5 (256-bit) | 1,568 bytes | High Security |
 | **Kyber-768** | KEM | 3 (192-bit) | 1,184 bytes | Balanced |
 | **Kyber-512** | KEM | 1 (128-bit) | 800 bytes | High Performance |
@@ -287,134 +332,12 @@ monitoring:
 - **Network**: 25+ Gbps
 - **OS**: Ubuntu 22.04 LTS, RHEL 9
 
-## 📊 Performance & Scalability
-
-### Connection Capacity
-
-| **Configuration** | **Concurrent Connections** | **Throughput** | **CPU Usage** |
-|------------------|---------------------------|----------------|---------------|
-| **Small Enterprise** | 100-500 | 1-5 Gbps | 20-40% |
-| **Medium Enterprise** | 500-2,000 | 5-20 Gbps | 40-60% |
-| **Large Enterprise** | 2,000-10,000 | 20-100 Gbps | 60-80% |
-| **Carrier Grade** | 10,000+ | 100+ Gbps | 70-90% |
-
-### Performance Optimization
-
-```bash
-# System tuning for high performance
-echo 'net.core.rmem_max = 134217728' >> /etc/sysctl.conf
-echo 'net.core.wmem_max = 134217728' >> /etc/sysctl.conf
-echo 'net.ipv4.tcp_rmem = 4096 87380 134217728' >> /etc/sysctl.conf
-echo 'net.ipv4.tcp_wmem = 4096 65536 134217728' >> /etc/sysctl.conf
-sysctl -p
-
-# strongSwan performance tuning
-echo 'charon.threads = 32' >> /etc/strongswan.d/charon.conf
-echo 'charon.worker_threads = 16' >> /etc/strongswan.d/charon.conf
-echo 'charon.processor.priority_threads.high = 8' >> /etc/strongswan.d/charon.conf
-```
-
-## 🔒 Security Hardening
-
-### Enterprise Security Features
-
-#### Multi-Factor Authentication
-```yaml
-authentication:
-  primary: pki_certificates
-  secondary: 
-    - totp_tokens
-    - hardware_keys
-    - biometric_verification
-  policies:
-    certificate_pinning: enabled
-    session_timeout: 3600
-    max_failed_attempts: 3
-```
-
-#### Network Segmentation
-```yaml
-network_policies:
-  hub_isolation: enabled
-  spoke_isolation: enabled
-  micro_segmentation: enabled
-  zero_trust_model: enforced
-```
-
-#### Advanced Threat Protection
-```yaml
-threat_protection:
-  intrusion_detection: enabled
-  anomaly_detection: enabled
-  threat_intelligence: enabled
-  automated_response: enabled
-```
-
-### Compliance & Auditing
-
-#### Supported Standards
-- **FIPS 140-2**: Cryptographic module validation
-- **Common Criteria**: Security evaluation standard
-- **NIST Cybersecurity Framework**: Risk management
-- **SOC 2 Type II**: Security controls audit
-- **ISO 27001**: Information security management
-
-#### Audit Logging
-```bash
-# Comprehensive audit trail
-- Authentication events
-- Configuration changes
-- Certificate operations
-- Connection establishment/termination
-- Security policy violations
-- Administrative actions
-```
-
-## 🌐 Integration & Compatibility
-
-### Directory Services Integration
-```yaml
-directory_services:
-  active_directory:
-    enabled: true
-    ldap_url: "ldaps://dc.company.com:636"
-    base_dn: "DC=company,DC=com"
-  
-  azure_ad:
-    enabled: true
-    tenant_id: "tenant-uuid"
-    client_id: "client-uuid"
-  
-  okta:
-    enabled: true
-    domain: "company.okta.com"
-    api_token: "encrypted_token"
-```
-
-### SIEM Integration
-```yaml
-siem_integration:
-  splunk:
-    enabled: true
-    hec_endpoint: "https://splunk.company.com:8088"
-    
-  qradar:
-    enabled: true
-    syslog_endpoint: "qradar.company.com:514"
-    
-  sentinel:
-    enabled: true
-    workspace_id: "workspace-uuid"
-```
-
-### Network Equipment Compatibility
-- **Cisco**: ASA, ISR, ASR series
-- **Juniper**: SRX, MX, EX series  
-- **Fortinet**: FortiGate series
-- **Palo Alto**: PA series
-- **pfSense**: Community and Plus editions
-
 ## 📚 Documentation
+
+### Quick Start Guides
+- **[Fixed Demo Setup](DEMO-SETUP-FIXED.md)**: One-command demo with 1 hub + 3 clients
+- **[Quick Start Fixed](QUICKSTART-FIXED.md)**: Step-by-step setup guide
+- **[Production Setup](start-pqc-vpn.sh)**: Automated production deployment
 
 ### Administrator Guides
 - **[Installation Guide](docs/installation.md)**: Detailed installation procedures
@@ -433,89 +356,6 @@ siem_integration:
 - **[PQC Implementation](docs/pqc-implementation.md)**: Post-quantum cryptography details
 - **[Performance Tuning](docs/performance-tuning.md)**: Optimization guidelines
 - **[Monitoring Guide](docs/monitoring.md)**: Monitoring and alerting setup
-
-## 🤝 Support & Maintenance
-
-### Enterprise Support Tiers
-
-#### Standard Support
-- **Response Time**: 48 hours
-- **Coverage**: Business hours (8x5)
-- **Channels**: Email, documentation
-
-#### Premium Support  
-- **Response Time**: 4 hours
-- **Coverage**: Extended hours (16x5)
-- **Channels**: Email, phone, chat
-
-#### Mission Critical Support
-- **Response Time**: 1 hour
-- **Coverage**: 24x7x365
-- **Channels**: All channels + dedicated TAM
-
-### Maintenance & Updates
-
-```bash
-# Automated update system
-sudo python3 tools/pqc-vpn-manager.py update check
-sudo python3 tools/pqc-vpn-manager.py update apply --rollback-enabled
-sudo python3 tools/pqc-vpn-manager.py update verify
-
-# Security patch management
-sudo python3 tools/pqc-vpn-manager.py security-updates --auto-apply
-```
-
-## 🎯 Use Cases
-
-### Enterprise Network Security
-- **Remote Workforce**: Secure access for distributed teams
-- **Branch Connectivity**: Site-to-site VPN for branch offices  
-- **Cloud Integration**: Hybrid cloud secure connectivity
-- **Partner Access**: Secure B2B communications
-
-### Government & Defense
-- **Classified Networks**: Future-proof secure communications
-- **Critical Infrastructure**: Protection against quantum threats
-- **Diplomatic Communications**: Secure international channels
-- **Research Collaboration**: Secure academic networks
-
-### Financial Services
-- **Trading Networks**: High-frequency trading protection
-- **Banking Operations**: Customer data transmission security
-- **Payment Processing**: Transaction-level security
-- **Regulatory Compliance**: Meeting quantum-safe requirements
-
-### Healthcare
-- **Patient Data Protection**: HIPAA-compliant communications
-- **Medical Research**: Secure research collaboration
-- **Telemedicine**: Quantum-safe patient consultations
-- **Multi-site Operations**: Secure hospital network connectivity
-
-## 📈 Roadmap
-
-### Version 1.1 (Q1 2026)
-- Enhanced mobile client applications
-- Additional monitoring and analytics features
-- Performance optimizations for high-scale deployments
-- Extended API functionality
-
-### Version 1.2 (Q2 2026)
-- Hardware Security Module (HSM) integration
-- Advanced load balancing with geographic routing
-- Enhanced SIEM integration capabilities
-- Additional compliance certifications
-
-### Version 1.3 (Q3 2026)
-- Machine learning-based threat detection
-- Automated certificate lifecycle management
-- Enhanced mobile device management
-- Advanced reporting and analytics
-
-### Version 2.0 (Q4 2026)
-- Next-generation PQC algorithm support
-- Multi-protocol VPN support (WireGuard, OpenVPN)
-- Advanced zero-trust networking features
-- Cloud-native service mesh integration
 
 ## ⚠️ Production Deployment Checklist
 
@@ -579,7 +419,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 Protect your organization's communications against current and future quantum computer threats with NIST-standardized algorithms, enterprise management features, and 24x7 support.
 
-[![Deploy Now](https://img.shields.io/badge/Deploy-Enterprise-green.svg?style=for-the-badge)](QUICKSTART.md)
+[![Demo Setup](https://img.shields.io/badge/Try-Demo-green.svg?style=for-the-badge)](DEMO-SETUP-FIXED.md)
 [![Contact Sales](https://img.shields.io/badge/Contact-Sales-blue.svg?style=for-the-badge)](mailto:sales@qentangle.com)
 
 ---
