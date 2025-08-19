@@ -1,5 +1,5 @@
-# Real PQC-VPN Production Requirements
-# Updated for actual Post-Quantum Cryptography implementation
+# Core PQC-VPN Requirements
+# Essential dependencies for actual functionality
 
 # Core Framework
 Flask==3.0.0
@@ -9,7 +9,6 @@ Werkzeug==3.0.1
 
 # Database
 SQLAlchemy==2.0.23
-sqlite3-to-mysql==1.4.16
 psycopg2-binary==2.9.9
 redis==5.0.1
 
@@ -17,7 +16,6 @@ redis==5.0.1
 cryptography>=41.0.0
 pycryptodome==3.19.0
 paramiko==3.3.1
-pynacl==1.5.0
 
 # OpenSSL and OQS integration
 cffi==1.16.0
@@ -27,7 +25,6 @@ pycparser==2.21
 netifaces==0.11.0
 pyroute2==0.7.12
 netaddr==0.10.1
-scapy==2.5.0
 
 # System Monitoring
 psutil==5.9.6
@@ -42,7 +39,6 @@ MarkupSafe==2.1.3
 
 # Monitoring and Metrics
 prometheus-client==0.19.0
-redis-py-cluster==2.1.3
 
 # Configuration Management
 PyYAML==6.0.1
@@ -52,15 +48,10 @@ configparser==6.0.0
 # Logging and Debugging
 structlog==23.2.0
 colorama==0.4.6
-rich==13.7.0
 
 # Certificate Management
 pyOpenSSL==23.3.0
 certifi==2023.11.17
-
-# Enterprise Features
-ldap3==2.9.1
-python-pam==2.0.2
 
 # High Availability
 kubernetes==28.1.0
@@ -80,27 +71,14 @@ mypy==1.7.1
 # Security
 bcrypt==4.1.2
 passlib==1.7.4
-python-jose[cryptography]==3.3.0
 
 # Time and Scheduling
 schedule==1.2.1
 croniter==2.0.1
 
-# Email and Notifications
-emails==0.6.0
-slack-sdk==3.26.1
-
 # Data Processing
 pandas==2.1.4
 numpy==1.26.2
-
-# Backup and Recovery
-boto3==1.34.0
-azure-storage-blob==12.19.0
-google-cloud-storage==2.10.0
-
-# Compliance and Audit
-audit-python==1.1.0
 
 # Windows Support
 pywin32==306; sys_platform == "win32"
@@ -111,7 +89,6 @@ systemd-python==235; sys_platform == "linux"
 
 # Development Tools
 ipython==8.17.2
-jupyter==1.0.0
 
 # Documentation
 sphinx==7.2.6
@@ -125,24 +102,11 @@ marshmallow==3.20.1
 aiofiles==23.2.1
 aiohttp==3.9.1
 
-# Enterprise Integration
-pykerberos==1.2.4
-requests-kerberos==0.14.0
-
-# Performance Profiling
-line-profiler==4.1.1
-memory-profiler==0.61.0
-
 # Container Support
 docker-compose==1.29.2
 
-# Metrics Export
-influxdb-client==1.39.0
-elasticsearch==8.11.0
-
 # Real-time Communication
 websockets==12.0
-socketio==0.2.1
 
 # Configuration Validation
 cerberus==1.3.5
@@ -157,94 +121,28 @@ watchdog==3.0.0
 
 # Network Testing
 ping3==4.0.4
-speedtest-cli==2.1.3
-
-# Enterprise Reporting
-openpyxl==3.1.2
-reportlab==4.0.7
-
-# Backup Encryption
-age-python==1.1.0
 
 # Advanced Logging
 loguru==0.7.2
 
 # Configuration Secrets Management
 keyring==24.3.0
-hvac==2.1.0  # HashiCorp Vault
-
-# Performance Monitoring
-py-spy==0.3.14
 
 # Network Discovery
 python-nmap==0.7.1
 
-# Certificate Transparency
-certificate-transparency==0.1.3
-
-# RADIUS Support
-pyrad==2.4
-
-# SNMP Monitoring
-pysnmp==4.4.12
-
-# Hardware Security Module (HSM) Support
-pkcs11==0.7.0
-pyhsm==1.2.1
-
-# Quantum Random Number Generation
-qrng==1.1.0
-
 # Advanced Cryptographic Protocols
-pqcrypto==0.1.0
 liboqs-python==0.8.0
-
-# Enterprise Directory Integration
-python-ldap==3.4.3
-
-# Advanced Network Analysis
-pyshark==0.6
-
-# Real-time Dashboard
-dash==2.16.1
-plotly==5.17.0
-
-# Advanced Caching
-diskcache==5.6.3
-
-# Process Communication
-pyzmq==25.1.2
 
 # Advanced Configuration
 hydra-core==1.3.2
 omegaconf==2.3.0
 
-# Machine Learning for Anomaly Detection
-scikit-learn==1.3.2
-
 # Geographic IP Information
 geoip2==4.7.0
 
-# Network Quality Monitoring
-iperf3==0.0.12
-
-# Advanced Parsing
-pyparsing==3.1.1
-
-# System Information
-platform==1.0.8
-
 # Memory Management
 pympler==0.9.1
-
-# Signal Processing
-scipy==1.11.4
-
-# Advanced HTTP Client
-httpx==0.25.2
-
-# Protocol Buffers
-protobuf==4.25.1
 
 # Advanced JSON Processing
 orjson==3.9.10
@@ -253,54 +151,14 @@ orjson==3.9.10
 asyncpg==0.29.0
 aiosqlite==0.19.0
 
-# Enterprise Message Queue
-celery==5.3.4
-kombu==5.3.4
-
 # Advanced Validation
 pydantic==2.5.1
-
-# Enterprise Backup
-duplicity==2.1.4
-
-# Network Simulation
-mininet==2.3.0
-
-# Advanced Monitoring
-statsd==4.0.1
-
-# High-Performance Computing
-mpi4py==3.1.5
-
-# Advanced Security
-pyotp==2.9.0
-qrcode==7.4.2
-
-# Enterprise SSO
-python-saml==1.15.0
-
-# Advanced Analytics
-streamlit==1.28.2
 
 # Performance Testing
 locust==2.17.0
 
-# Enterprise Compliance
-python-audit==1.0.0
-
 # Advanced Notification
 plyer==2.1.0
-
-# Enterprise Deployment
-ansible==8.7.0
-terraform-provider==0.1.0
-
-# Container Orchestration
-openshift==0.13.2
-rancher-client==0.3.2
-
-# Cloud Integration
-apache-libcloud==3.8.0
 
 # Advanced Security Scanning
 bandit==1.7.5
@@ -308,125 +166,33 @@ safety==2.3.4
 
 # Performance Optimization
 Cython==3.0.6
-numba==0.58.1
-
-# Enterprise Monitoring
-nagios-plugin==0.1.1
-zabbix-api==0.5.4
-
-# Advanced Cryptography
-pycryptodome-test-vectors==1.0.11
-
-# Enterprise Analytics
-apache-superset==3.0.3
-
-# Advanced Configuration Management
-saltstack==2023.1.0
-
-# Real-time Data Processing
-apache-kafka-python==2.0.2
-
-# Enterprise Search
-elasticsearch-dsl==8.11.0
-
-# Advanced Visualization
-matplotlib==3.8.2
-seaborn==0.13.0
-
-# Enterprise Integration
-apache-airflow==2.7.3
-
-# Advanced Testing
-hypothesis==6.92.1
-factory-boy==3.3.0
-
-# Enterprise Backup
-borgbackup==1.2.7
 
 # Advanced Networking
 dnspython==2.4.2
-pycares==4.4.0
-
-# Enterprise Directory
-python-freeipa==1.0.8
-
-# Advanced Monitoring
-collectd==0.8.0
-
-# Enterprise Security
-cyberark-conjur==0.1.1
 
 # Advanced Performance
 fastapi==0.104.1
 uvicorn==0.24.0
 
-# Enterprise Database
+# Database Drivers
 pymongo==4.6.1
-cassandra-driver==3.28.0
-
-# Advanced Caching
-memcached==1.7.5
 
 # Enterprise Message Queue
 pika==1.3.2
-apache-kafka==2.0.2
 
 # Advanced Configuration
 consul-python==1.1.0
-etcd3==0.12.0
 
-# Enterprise Deployment
-docker-py==1.10.6
+# Container Runtime
 podman-py==4.7.0
-
-# Advanced Security
-vault-client==0.1.0
-keystore-python==1.0.0
-
-# Enterprise Integration
-servicenow-python==1.0.0
-jira-python==3.5.0
-
-# Advanced Analytics
-apache-spark==3.5.0
-dask==2023.12.0
-
-# Enterprise Reporting
-jasper-python==1.0.0
-pentaho-python==1.0.0
-
-# Advanced Deployment
-kubernetes-client==28.1.0
-helm-python==1.0.0
-
-# Enterprise Monitoring
-datadog==0.48.0
-newrelic==9.2.0
-
-# Advanced Security
-okta-python==2.9.0
-auth0-python==4.7.1
-
-# Enterprise Integration
-salesforce-python==2.5.0
-microsoft-graph==1.0.0
-
-# Advanced Performance
-redis-cluster==2.1.3
-hazelcast-python==5.3.0
-
-# Enterprise Database
-oracle-python==1.3.2
-postgresql-python==3.1.8
-
-# Advanced Analytics
-tableau-python==0.1.0
-powerbi-python==3.1.1
-
-# Enterprise Security
-splunk-python==1.7.3
-qradar-python==1.0.0
 
 # Final optimizations for production
 gevent==23.9.1
 greenlet==3.0.1
+
+# Command Line Interface
+click>=8.0.0
+tabulate>=0.9.0
+
+# Additional monitoring tools (actually used in connection-monitor.py)
+rich==13.7.0
