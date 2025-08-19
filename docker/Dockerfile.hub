@@ -1,145 +1,163 @@
-# Use Ubuntu 22.04 as base image for better PQC support
 FROM ubuntu:22.04
 
-# Set environment variables
+# Prevent interactive prompts during package installation
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=UTC
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
     build-essential \
-    libssl-dev \
-    libgmp-dev \
-    libtspi-dev \
-    libldap2-dev \
-    libcurl4-openssl-dev \
-    libxml2-dev \
-    libsystemd-dev \
-    libpcsclite-dev \
-    pkg-config \
-    gettext \
-    flex \
-    bison \
-    autoconf \
-    automake \
-    libtool \
+    cmake \
     git \
     wget \
     curl \
+    ninja-build \
+    pkg-config \
+    libtool \
+    autotools-dev \
+    autoconf \
+    automake \
     python3 \
     python3-pip \
-    cmake \
-    ninja-build \
-    iptables \
-    iputils-ping \
+    python3-dev \
+    libssl-dev \
+    libgmp-dev \
+    libcurl4-openssl-dev \
+    libsqlite3-dev \
+    libxml2-dev \
+    libpam0g-dev \
+    libcap-dev \
+    systemd \
     net-tools \
     iproute2 \
-    supervisor \
+    iptables \
+    tcpdump \
+    netcat-openbsd \
+    htop \
+    vim \
+    jq \
     && rm -rf /var/lib/apt/lists/*
 
-# Create directories
-RUN mkdir -p /opt/pqc-vpn/{certs,scripts,logs} \
-    && mkdir -p /etc/ipsec.d/{cacerts,certs,private} \
-    && mkdir -p /var/log/pqc-vpn
+# Install Python dependencies for real monitoring
+RUN pip3 install \
+    flask \
+    prometheus_client \
+    psutil \
+    cryptography \
+    requests \
+    pyyaml \
+    subprocess32 \
+    ipaddress
 
-# Install liboqs for Post-Quantum Cryptography
+# Build and install liboqs (Open Quantum Safe) for PQC algorithms
 WORKDIR /tmp
-RUN git clone --depth 1 --branch main https://github.com/open-quantum-safe/liboqs.git \
-    && cd liboqs \
-    && mkdir build && cd build \
-    && cmake -G Ninja -DCMAKE_INSTALL_PREFIX=/usr/local \
+RUN git clone --branch main https://github.com/open-quantum-safe/liboqs.git && \
+    cd liboqs && \
+    mkdir build && cd build && \
+    cmake -GNinja -DCMAKE_INSTALL_PREFIX=/usr/local \
           -DOQS_BUILD_ONLY_LIB=ON \
-          -DOQS_MINIMAL_BUILD="KEM_kyber_512;KEM_kyber_768;KEM_kyber_1024;SIG_dilithium_2;SIG_dilithium_3;SIG_dilithium_5" \
-          .. \
-    && ninja \
-    && ninja install \
-    && ldconfig \
-    && cd / \
-    && rm -rf /tmp/liboqs
+          -DOQS_MINIMAL_BUILD="KEM_kyber_512;KEM_kyber_768;KEM_kyber_1024;SIG_dilithium_2;SIG_dilithium_3;SIG_dilithium_5;SIG_falcon_512;SIG_falcon_1024" \
+          .. && \
+    ninja && \
+    ninja install && \
+    ldconfig
 
-# Install strongSwan with PQC support
-WORKDIR /tmp
-RUN git clone https://github.com/strongswan/strongswan.git \
-    && cd strongswan \
-    && git checkout 5.9.14 \
-    && ./autogen.sh \
-    && ./configure --prefix=/usr --sysconfdir=/etc --localstatedir=/var \
-        --libexecdir=/usr/lib --enable-openssl --enable-python-eggs \
-        --enable-cmd --enable-conf --enable-connmark --enable-dhcp \
-        --enable-eap-aka --enable-eap-gtc --enable-eap-identity \
-        --enable-eap-md5 --enable-eap-mschapv2 --enable-eap-radius \
-        --enable-eap-tls --enable-farp --enable-files --enable-gcrypt \
-        --enable-gmp --enable-ldap --enable-mysql --enable-sqlite \
-        --enable-stroke --enable-updown --enable-unity --enable-xauth-eap \
-        --enable-xauth-pam --enable-chapoly --enable-curl --enable-systemd \
-        --disable-des --enable-oqs --with-ipseclibdir=/usr/lib/ipsec \
-    && make -j$(nproc) \
-    && make install \
-    && cd / \
-    && rm -rf /tmp/strongswan
+# Build and install oqs-provider for OpenSSL
+RUN git clone --branch main https://github.com/open-quantum-safe/oqs-provider.git && \
+    cd oqs-provider && \
+    cmake -S . -B _build -DCMAKE_BUILD_TYPE=Release && \
+    cmake --build _build && \
+    cmake --install _build && \
+    echo "providers = provider_sect" >> /etc/ssl/openssl.cnf && \
+    echo "" >> /etc/ssl/openssl.cnf && \
+    echo "[provider_sect]" >> /etc/ssl/openssl.cnf && \
+    echo "default = default_sect" >> /etc/ssl/openssl.cnf && \
+    echo "oqsprovider = oqsprovider_sect" >> /etc/ssl/openssl.cnf && \
+    echo "" >> /etc/ssl/openssl.cnf && \
+    echo "[default_sect]" >> /etc/ssl/openssl.cnf && \
+    echo "activate = 1" >> /etc/ssl/openssl.cnf && \
+    echo "" >> /etc/ssl/openssl.cnf && \
+    echo "[oqsprovider_sect]" >> /etc/ssl/openssl.cnf && \
+    echo "activate = 1" >> /etc/ssl/openssl.cnf
 
-# Copy scripts and configurations
-COPY scripts/ /opt/pqc-vpn/scripts/
-COPY configs/hub/ /etc/
-RUN chmod +x /opt/pqc-vpn/scripts/*.sh
+# Build and install strongSwan with PQC support
+RUN git clone --branch 5.9.14 https://github.com/strongswan/strongswan.git && \
+    cd strongswan && \
+    ./autogen.sh && \
+    ./configure \
+        --enable-eap-identity \
+        --enable-eap-md5 \
+        --enable-eap-mschapv2 \
+        --enable-eap-tls \
+        --enable-eap-ttls \
+        --enable-eap-peap \
+        --enable-eap-tnc \
+        --enable-eap-dynamic \
+        --enable-eap-radius \
+        --enable-xauth-eap \
+        --enable-xauth-pam \
+        --enable-dhcp \
+        --enable-openssl \
+        --enable-curl \
+        --enable-sql \
+        --enable-sqlite \
+        --enable-attr-sql \
+        --enable-mediation \
+        --enable-unity \
+        --enable-cert-cache \
+        --enable-ccm \
+        --enable-gcm \
+        --enable-addrblock \
+        --enable-whitelist \
+        --enable-ext-auth \
+        --enable-counters \
+        --enable-lookip \
+        --enable-error-notify \
+        --enable-systemd \
+        --enable-swanctl \
+        --enable-vici \
+        --enable-pki \
+        --enable-acert \
+        --with-group=nogroup \
+        --sysconfdir=/etc && \
+    make -j$(nproc) && \
+    make install && \
+    ldconfig
 
-# Create supervisor configuration
-RUN echo '[supervisord]' > /etc/supervisor/conf.d/supervisord.conf \
-    && echo 'nodaemon=true' >> /etc/supervisor/conf.d/supervisord.conf \
-    && echo 'user=root' >> /etc/supervisor/conf.d/supervisord.conf \
-    && echo '' >> /etc/supervisor/conf.d/supervisord.conf \
-    && echo '[program:strongswan]' >> /etc/supervisor/conf.d/supervisord.conf \
-    && echo 'command=/usr/sbin/ipsec start --nofork' >> /etc/supervisor/conf.d/supervisord.conf \
-    && echo 'autostart=true' >> /etc/supervisor/conf.d/supervisord.conf \
-    && echo 'autorestart=true' >> /etc/supervisor/conf.d/supervisord.conf \
-    && echo 'stderr_logfile=/var/log/pqc-vpn/strongswan.err.log' >> /etc/supervisor/conf.d/supervisord.conf \
-    && echo 'stdout_logfile=/var/log/pqc-vpn/strongswan.out.log' >> /etc/supervisor/conf.d/supervisord.conf
+# Create strongSwan directories
+RUN mkdir -p /etc/ipsec.d/private /etc/ipsec.d/certs /etc/ipsec.d/cacerts /etc/ipsec.d/crls
 
-# Create entrypoint script
-RUN echo '#!/bin/bash' > /entrypoint.sh \
-    && echo 'set -e' >> /entrypoint.sh \
-    && echo '' >> /entrypoint.sh \
-    && echo '# Generate certificates if they do not exist' >> /entrypoint.sh \
-    && echo 'if [ ! -f "/opt/pqc-vpn/certs/ca/ca-cert.pem" ]; then' >> /entrypoint.sh \
-    && echo '    echo "Generating CA certificate..."' >> /entrypoint.sh \
-    && echo '    /opt/pqc-vpn/scripts/generate-pqc-certs.sh --ca' >> /entrypoint.sh \
-    && echo 'fi' >> /entrypoint.sh \
-    && echo '' >> /entrypoint.sh \
-    && echo 'if [ ! -f "/opt/pqc-vpn/certs/hub/hub-cert.pem" ]; then' >> /entrypoint.sh \
-    && echo '    echo "Generating hub certificate..."' >> /entrypoint.sh \
-    && echo '    HUB_IP=${HUB_IP:-$(hostname -i)}' >> /entrypoint.sh \
-    && echo '    /opt/pqc-vpn/scripts/generate-pqc-certs.sh --hub $HUB_IP' >> /entrypoint.sh \
-    && echo 'fi' >> /entrypoint.sh \
-    && echo '' >> /entrypoint.sh \
-    && echo '# Copy certificates to strongSwan directories' >> /entrypoint.sh \
-    && echo 'cp /opt/pqc-vpn/certs/ca/ca-cert.pem /etc/ipsec.d/cacerts/' >> /entrypoint.sh \
-    && echo 'cp /opt/pqc-vpn/certs/hub/hub-cert.pem /etc/ipsec.d/certs/' >> /entrypoint.sh \
-    && echo 'cp /opt/pqc-vpn/certs/hub/hub-key.pem /etc/ipsec.d/private/' >> /entrypoint.sh \
-    && echo '' >> /entrypoint.sh \
-    && echo '# Set proper permissions' >> /entrypoint.sh \
-    && echo 'chmod 644 /etc/ipsec.d/cacerts/*' >> /entrypoint.sh \
-    && echo 'chmod 644 /etc/ipsec.d/certs/*' >> /entrypoint.sh \
-    && echo 'chmod 600 /etc/ipsec.d/private/*' >> /entrypoint.sh \
-    && echo 'chmod 600 /etc/ipsec.secrets' >> /entrypoint.sh \
-    && echo '' >> /entrypoint.sh \
-    && echo '# Update configuration with environment variables' >> /entrypoint.sh \
-    && echo 'if [ -n "$HUB_IP" ]; then' >> /entrypoint.sh \
-    && echo '    sed -i "s/%HUB_IP%/$HUB_IP/g" /etc/ipsec.conf' >> /entrypoint.sh \
-    && echo 'fi' >> /entrypoint.sh \
-    && echo '' >> /entrypoint.sh \
-    && echo '# Start supervisor' >> /entrypoint.sh \
-    && echo 'exec /usr/bin/supervisord -c /etc/supervisor/conf.d/supervisord.conf' >> /entrypoint.sh \
-    && chmod +x /entrypoint.sh
+# Copy PQC certificate generation script
+COPY scripts/generate-pqc-certs.sh /usr/local/bin/pqc-keygen
+RUN chmod +x /usr/local/bin/pqc-keygen
 
-# Expose VPN ports
-EXPOSE 500/udp 4500/udp
+# Copy real monitoring scripts
+COPY tools/real-monitor.py /usr/local/bin/real-monitor
+COPY tools/metrics-collector.py /usr/local/bin/metrics-collector
+COPY tools/pqc-vpn-manager.py /usr/local/bin/pqc-vpn-manager
+RUN chmod +x /usr/local/bin/real-monitor /usr/local/bin/metrics-collector /usr/local/bin/pqc-vpn-manager
 
-# Set working directory
-WORKDIR /opt/pqc-vpn
+# Create web interface directory
+RUN mkdir -p /var/www/html
+
+# Copy real web dashboard
+COPY web/real-dashboard.html /var/www/html/index.html
+COPY web/api_server.py /usr/local/bin/api-server
+COPY web/static/ /var/www/html/static/
+RUN chmod +x /usr/local/bin/api-server
+
+# Create systemd service files
+RUN systemctl enable systemd-resolved
+
+# Create startup script
+COPY docker/hub-entrypoint.sh /usr/local/bin/hub-entrypoint.sh
+RUN chmod +x /usr/local/bin/hub-entrypoint.sh
+
+# Expose ports
+EXPOSE 500/udp 4500/udp 8443/tcp 9090/tcp
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD ipsec status || exit 1
 
-# Default command
-ENTRYPOINT ["/entrypoint.sh"]
+ENTRYPOINT ["/usr/local/bin/hub-entrypoint.sh"]
