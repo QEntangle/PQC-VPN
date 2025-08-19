@@ -1,28 +1,223 @@
-# Python dependencies for PQC-VPN management tools
+# PQC-VPN Python Dependencies v2.0.0
+# Enhanced requirements for Post-Quantum Cryptography VPN management tools
 # Install with: pip3 install -r requirements.txt
 
 # Core dependencies
-PyYAML>=6.0
-psutil>=5.9.0
-cryptography>=41.0.0
+PyYAML>=6.0.1
+psutil>=5.9.6
+cryptography>=41.0.7
 
-# Optional dependencies for enhanced functionality
-requests>=2.28.0
-click>=8.1.0
+# Enhanced functionality dependencies
+requests>=2.31.0
+click>=8.1.7
 tabulate>=0.9.0
 colorama>=0.4.6
 
-# Development and testing (optional)
-pytest>=7.0.0
-pytest-cov>=4.0.0
-black>=23.0.0
-flake8>=6.0.0
-mypy>=1.0.0
+# Web interface and API
+flask>=3.0.0
+flask-cors>=4.0.0
+jinja2>=3.1.2
+werkzeug>=3.0.1
+
+# Database and ORM
+sqlalchemy>=2.0.23
+alembic>=1.12.1
+
+# Data validation and serialization
+jsonschema>=4.19.2
+marshmallow>=3.20.1
+
+# Monitoring and metrics
+prometheus-client>=0.19.0
+schedule>=1.2.0
+
+# Security and cryptography enhancements
+pyjwt>=2.8.0
+bcrypt>=4.1.1
+passlib>=1.7.4
+
+# Networking and protocols
+paramiko>=3.3.1
+scapy>=2.5.0
+netaddr>=0.10.1
+
+# Configuration management
+python-dotenv>=1.0.0
+configparser>=6.0.0
+
+# Logging and monitoring
+structlog>=23.2.0
+rich>=13.7.0
+
+# Mathematical and scientific computing
+numpy>=1.24.4
+scipy>=1.11.4
+
+# Date and time handling
+python-dateutil>=2.8.2
+pytz>=2023.3
+
+# Development and testing dependencies (optional)
+pytest>=7.4.3
+pytest-cov>=4.1.0
+pytest-mock>=3.12.0
+pytest-asyncio>=0.21.1
+black>=23.11.0
+flake8>=6.1.0
+mypy>=1.7.1
+isort>=5.12.0
 
 # Documentation (optional)
-sphinx>=5.0.0
-sphinx-rtd-theme>=1.2.0
+sphinx>=7.2.6
+sphinx-rtd-theme>=1.3.0
+sphinx-autodoc-typehints>=1.25.2
 
-# Monitoring and visualization (optional)
-matplotlib>=3.6.0
-numpy>=1.24.0
+# Performance and optimization
+cython>=3.0.5
+numba>=0.58.1
+
+# Container and orchestration
+docker>=6.1.3
+kubernetes>=28.1.0
+
+# Cloud integrations (optional)
+boto3>=1.34.0        # AWS
+azure-storage-blob>=12.19.0  # Azure
+google-cloud-storage>=2.10.0  # GCP
+
+# Message queuing and async (optional)
+celery>=5.3.4
+redis>=5.0.1
+aiohttp>=3.9.1
+asyncio>=3.4.3
+
+# Data processing and analysis (optional)
+pandas>=2.1.3
+matplotlib>=3.8.2
+seaborn>=0.13.0
+
+# API documentation
+flask-restx>=1.3.0
+flasgger>=0.9.7.1
+
+# Email and notifications
+yagmail>=0.15.293
+slack-sdk>=3.26.1
+
+# File format support
+openpyxl>=3.1.2      # Excel files
+python-docx>=1.1.0   # Word documents
+pypdf>=3.17.1        # PDF files
+
+# Image processing (for QR codes, charts)
+pillow>=10.1.0
+qrcode>=7.4.2
+
+# Advanced cryptography libraries
+pycryptodome>=3.19.0
+pyopenssl>=23.3.0
+
+# System integration
+pywin32>=306; sys_platform == "win32"  # Windows-specific
+python-systemd>=235; sys_platform == "linux"  # Linux systemd integration
+
+# Hardware security module support
+python-pkcs11>=0.7.0
+pyscard>=2.0.7
+
+# Network scanning and discovery
+python-nmap>=0.7.1
+netifaces>=0.11.0
+
+# Data compression and archiving
+zstandard>=0.22.0
+lz4>=4.3.2
+
+# Internationalization
+babel>=2.13.1
+
+# Configuration file formats
+toml>=0.10.2
+ruamel.yaml>=0.18.5
+
+# Process management
+supervisor>=4.2.5
+
+# Backup and synchronization
+rsync>=0.1.2
+
+# Memory profiling and debugging
+memory-profiler>=0.61.0
+line-profiler>=4.1.1
+
+# SSL/TLS testing
+sslyze>=5.1.3
+certvalidator>=0.11.1
+
+# Network time protocol
+ntplib>=0.4.0
+
+# Geographic IP lookup
+geoip2>=4.7.0
+maxminddb>=2.2.0
+
+# Load testing and benchmarking
+locust>=2.17.0
+
+# Certificate transparency
+certificate-transparency>=0.1.0
+
+# LDAP integration (optional)
+python-ldap>=3.4.3
+
+# RADIUS authentication (optional)
+pyrad>=2.4
+
+# SNMP monitoring (optional)
+pysnmp>=4.4.12
+
+# Version constraints for security
+urllib3>=2.0.7,<3.0.0
+setuptools>=68.0.0
+
+# Pinned versions for stability (can be updated as needed)
+# These are known working versions as of 2025
+
+# Note: Some packages may require system-level dependencies
+# For Ubuntu/Debian:
+#   sudo apt-get install build-essential libssl-dev libffi-dev python3-dev
+#   sudo apt-get install libldap2-dev libsasl2-dev  # for python-ldap
+#   sudo apt-get install libpq-dev  # for PostgreSQL support
+
+# For CentOS/RHEL:
+#   sudo yum install gcc openssl-devel libffi-devel python3-devel
+#   sudo yum install openldap-devel  # for python-ldap
+#   sudo yum install postgresql-devel  # for PostgreSQL support
+
+# For Windows:
+#   Most packages should install via pip with pre-compiled wheels
+#   Visual Studio Build Tools may be required for some packages
+
+# Installation notes:
+# 1. Use virtual environment: python3 -m venv pqc-vpn-env && source pqc-vpn-env/bin/activate
+# 2. Upgrade pip first: pip install --upgrade pip
+# 3. Install requirements: pip install -r requirements.txt
+# 4. For development: pip install -r requirements.txt[dev]
+# 5. For minimal installation: pip install -r requirements-minimal.txt (create separate file)
+
+# Performance notes:
+# - numpy and scipy provide significant performance improvements for cryptographic operations
+# - cython and numba can accelerate Python code execution
+# - Consider using PyPy for better performance in CPU-intensive operations
+
+# Security notes:
+# - Always verify package signatures when possible
+# - Regularly update dependencies to patch security vulnerabilities
+# - Use dependency scanning tools like safety: pip install safety && safety check
+# - Consider using pip-audit for security auditing: pip install pip-audit && pip-audit
+
+# Compatibility notes:
+# - Python 3.8+ is required for all features
+# - Python 3.9+ is recommended for best performance
+# - Python 3.11+ provides additional performance improvements
+# - Some packages may not be available for all architectures (ARM, etc.)
