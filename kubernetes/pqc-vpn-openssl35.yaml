@@ -1,0 +1,691 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: pqc-vpn
+  labels:
+    name: pqc-vpn
+    version: "3.0.0"
+    crypto-backend: "openssl-3.5"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pqc-vpn-config
+  namespace: pqc-vpn
+  labels:
+    app: pqc-vpn-hub
+    component: config
+data:
+  HUB_IP: "10.100.0.10"  # Update with your cluster IP
+  OPENSSL_VERSION: "3.5.0"
+  ENABLE_MONITORING: "true"
+  ENABLE_WEB_INTERFACE: "true"
+  ENABLE_FIPS: "false"
+  LOG_LEVEL: "info"
+  CRYPTO_POLICY: "enterprise"
+  MAX_CONNECTIONS: "1000"
+  SESSION_TIMEOUT: "3600"
+  
+  # OpenSSL 3.5 environment
+  OPENSSL_CONF: "/usr/local/openssl35/ssl/openssl.cnf"
+  LD_LIBRARY_PATH: "/usr/local/openssl35/lib"
+  PATH: "/usr/local/openssl35/bin:/usr/local/strongswan/sbin:/usr/local/strongswan/bin:/usr/local/bin:/usr/bin:/bin"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: pqc-vpn-secrets
+  namespace: pqc-vpn
+  labels:
+    app: pqc-vpn-hub
+    component: secrets
+type: Opaque
+data:
+  # Base64 encoded values - update with your actual values
+  grafana-password: cHFjdnBuMjAyNCE=  # pqcvpn2024!
+  database-password: c2VjdXJlUGFzcw==  # securePass
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pqc-vpn-certs
+  namespace: pqc-vpn
+  labels:
+    app: pqc-vpn-hub
+    component: storage
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: fast-ssd  # Update with your storage class
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pqc-vpn-logs
+  namespace: pqc-vpn
+  labels:
+    app: pqc-vpn-hub
+    component: storage
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: standard
+  resources:
+    requests:
+      storage: 50Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pqc-vpn-data
+  namespace: pqc-vpn
+  labels:
+    app: pqc-vpn-hub
+    component: storage
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: fast-ssd
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pqc-vpn-hub
+  namespace: pqc-vpn
+  labels:
+    app: pqc-vpn-hub
+    version: "3.0.0"
+    crypto-backend: "openssl-3.5"
+spec:
+  replicas: 1  # VPN hub should be singleton
+  strategy:
+    type: Recreate  # Ensure only one instance
+  selector:
+    matchLabels:
+      app: pqc-vpn-hub
+  template:
+    metadata:
+      labels:
+        app: pqc-vpn-hub
+        version: "3.0.0"
+        crypto-backend: "openssl-3.5"
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: pqc-vpn-hub
+      securityContext:
+        runAsNonRoot: false  # VPN requires root privileges
+        fsGroup: 0
+      
+      initContainers:
+      - name: init-certificates
+        image: pqc-vpn/hub-openssl35:latest
+        imagePullPolicy: IfNotPresent
+        command:
+        - /bin/bash
+        - -c
+        - |
+          echo "Initializing PQC-VPN with OpenSSL 3.5..."
+          
+          # Set up OpenSSL 3.5 environment
+          export OPENSSL_CONF=/usr/local/openssl35/ssl/openssl.cnf
+          export LD_LIBRARY_PATH=/usr/local/openssl35/lib
+          export PATH=/usr/local/openssl35/bin:$PATH
+          
+          # Check if certificates exist
+          if [ ! -f /etc/ipsec.d/cacerts/ca-cert.pem ]; then
+            echo "Generating CA certificate with OpenSSL 3.5..."
+            /usr/local/bin/pqc-vpn/pqc-keygen-openssl35.py ca \
+              --key-type rsa --key-size 4096 --force
+          fi
+          
+          if [ ! -f /etc/ipsec.d/certs/hub-cert.pem ]; then
+            echo "Generating hub certificate with OpenSSL 3.5..."
+            /usr/local/bin/pqc-vpn/pqc-keygen-openssl35.py server pqc-vpn-hub \
+              --key-type rsa --key-size 4096 \
+              --san "pqc-vpn-hub,pqc-vpn-hub.pqc-vpn.svc.cluster.local,${HUB_IP}"
+          fi
+          
+          echo "Certificate initialization completed"
+        envFrom:
+        - configMapRef:
+            name: pqc-vpn-config
+        volumeMounts:
+        - name: pqc-vpn-certs
+          mountPath: /etc/ipsec.d
+        - name: pqc-vpn-data
+          mountPath: /opt/pqc-vpn/data
+        securityContext:
+          runAsUser: 0
+          capabilities:
+            add:
+            - NET_ADMIN
+            - NET_RAW
+      
+      containers:
+      - name: pqc-vpn-hub
+        image: pqc-vpn/hub-openssl35:latest
+        imagePullPolicy: IfNotPresent
+        
+        ports:
+        - name: ike
+          containerPort: 500
+          protocol: UDP
+        - name: ipsec-nat-t
+          containerPort: 4500
+          protocol: UDP
+        - name: web-mgmt
+          containerPort: 8443
+          protocol: TCP
+        - name: metrics
+          containerPort: 9090
+          protocol: TCP
+        
+        envFrom:
+        - configMapRef:
+            name: pqc-vpn-config
+        - secretRef:
+            name: pqc-vpn-secrets
+        
+        volumeMounts:
+        - name: pqc-vpn-certs
+          mountPath: /etc/ipsec.d
+        - name: pqc-vpn-logs
+          mountPath: /var/log
+        - name: pqc-vpn-data
+          mountPath: /opt/pqc-vpn/data
+        
+        securityContext:
+          runAsUser: 0
+          capabilities:
+            add:
+            - NET_ADMIN
+            - NET_RAW
+            - NET_BIND_SERVICE
+            drop:
+            - ALL
+          readOnlyRootFilesystem: false
+          allowPrivilegeEscalation: true
+        
+        resources:
+          requests:
+            cpu: 500m
+            memory: 1Gi
+          limits:
+            cpu: 2000m
+            memory: 4Gi
+        
+        livenessProbe:
+          exec:
+            command:
+            - /opt/pqc-vpn/scripts/health-check.sh
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 10
+          failureThreshold: 3
+        
+        readinessProbe:
+          exec:
+            command:
+            - /bin/bash
+            - -c
+            - |
+              /usr/local/strongswan/sbin/ipsec status > /dev/null 2>&1 &&
+              /usr/local/openssl35/bin/openssl version > /dev/null 2>&1
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        
+        lifecycle:
+          preStop:
+            exec:
+              command:
+              - /bin/bash
+              - -c
+              - |
+                echo "Gracefully shutting down PQC-VPN..."
+                /usr/local/strongswan/sbin/ipsec stop
+                sleep 10
+      
+      volumes:
+      - name: pqc-vpn-certs
+        persistentVolumeClaim:
+          claimName: pqc-vpn-certs
+      - name: pqc-vpn-logs
+        persistentVolumeClaim:
+          claimName: pqc-vpn-logs
+      - name: pqc-vpn-data
+        persistentVolumeClaim:
+          claimName: pqc-vpn-data
+      
+      nodeSelector:
+        kubernetes.io/arch: amd64
+      
+      tolerations:
+      - key: "node-role.kubernetes.io/master"
+        operator: "Exists"
+        effect: "NoSchedule"
+      
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+              - key: app
+                operator: In
+                values:
+                - pqc-vpn-hub
+            topologyKey: kubernetes.io/hostname
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pqc-vpn-hub-ipsec
+  namespace: pqc-vpn
+  labels:
+    app: pqc-vpn-hub
+    component: ipsec
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+    service.beta.kubernetes.io/aws-load-balancer-backend-protocol: "udp"
+spec:
+  type: LoadBalancer
+  externalTrafficPolicy: Local
+  selector:
+    app: pqc-vpn-hub
+  ports:
+  - name: ike
+    port: 500
+    targetPort: 500
+    protocol: UDP
+  - name: ipsec-nat-t
+    port: 4500
+    targetPort: 4500
+    protocol: UDP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pqc-vpn-hub-web
+  namespace: pqc-vpn
+  labels:
+    app: pqc-vpn-hub
+    component: web
+spec:
+  type: ClusterIP
+  selector:
+    app: pqc-vpn-hub
+  ports:
+  - name: web-mgmt
+    port: 8443
+    targetPort: 8443
+    protocol: TCP
+  - name: metrics
+    port: 9090
+    targetPort: 9090
+    protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: pqc-vpn-web-ingress
+  namespace: pqc-vpn
+  labels:
+    app: pqc-vpn-hub
+    component: ingress
+  annotations:
+    kubernetes.io/ingress.class: "nginx"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
+    nginx.ingress.kubernetes.io/ssl-passthrough: "true"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  tls:
+  - hosts:
+    - pqc-vpn.yourdomain.com
+    secretName: pqc-vpn-tls
+  rules:
+  - host: pqc-vpn.yourdomain.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: pqc-vpn-hub-web
+            port:
+              number: 8443
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: pqc-vpn-hub
+  namespace: pqc-vpn
+  labels:
+    app: pqc-vpn-hub
+    component: rbac
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: pqc-vpn-hub
+  labels:
+    app: pqc-vpn-hub
+    component: rbac
+rules:
+- apiGroups: [""]
+  resources: ["pods", "services", "endpoints"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["configmaps", "secrets"]
+  verbs: ["get", "list", "watch", "create", "update", "patch"]
+- apiGroups: ["apps"]
+  resources: ["deployments", "replicasets"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: pqc-vpn-hub
+  labels:
+    app: pqc-vpn-hub
+    component: rbac
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: pqc-vpn-hub
+subjects:
+- kind: ServiceAccount
+  name: pqc-vpn-hub
+  namespace: pqc-vpn
+---
+# Redis for session management
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: pqc-vpn
+  labels:
+    app: redis
+    component: cache
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+        component: cache
+    spec:
+      containers:
+      - name: redis
+        image: redis:7.2-alpine
+        ports:
+        - containerPort: 6379
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 999
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
+        volumeMounts:
+        - name: redis-data
+          mountPath: /data
+      volumes:
+      - name: redis-data
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: pqc-vpn
+  labels:
+    app: redis
+    component: cache
+spec:
+  selector:
+    app: redis
+  ports:
+  - port: 6379
+    targetPort: 6379
+---
+# Prometheus for monitoring
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+  namespace: pqc-vpn
+  labels:
+    app: prometheus
+    component: monitoring
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prometheus
+  template:
+    metadata:
+      labels:
+        app: prometheus
+        component: monitoring
+    spec:
+      containers:
+      - name: prometheus
+        image: prom/prometheus:v2.48.0
+        args:
+        - '--config.file=/etc/prometheus/prometheus.yml'
+        - '--storage.tsdb.path=/prometheus'
+        - '--storage.tsdb.retention.time=30d'
+        - '--web.enable-lifecycle'
+        - '--log.level=info'
+        ports:
+        - containerPort: 9090
+        resources:
+          requests:
+            cpu: 200m
+            memory: 512Mi
+          limits:
+            cpu: 1000m
+            memory: 2Gi
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 65534
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
+        volumeMounts:
+        - name: prometheus-config
+          mountPath: /etc/prometheus
+        - name: prometheus-data
+          mountPath: /prometheus
+      volumes:
+      - name: prometheus-config
+        configMap:
+          name: prometheus-config
+      - name: prometheus-data
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  namespace: pqc-vpn
+  labels:
+    app: prometheus
+    component: monitoring
+spec:
+  selector:
+    app: prometheus
+  ports:
+  - port: 9090
+    targetPort: 9090
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: pqc-vpn
+  labels:
+    app: prometheus
+    component: config
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+    
+    scrape_configs:
+    - job_name: 'pqc-vpn-hub'
+      static_configs:
+      - targets: ['pqc-vpn-hub-web:9090']
+      scrape_interval: 30s
+      
+    - job_name: 'kubernetes-pods'
+      kubernetes_sd_configs:
+      - role: pod
+        namespaces:
+          names:
+          - pqc-vpn
+      relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+        action: keep
+        regex: true
+      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+        action: replace
+        target_label: __metrics_path__
+        regex: (.+)
+      - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+        action: replace
+        regex: ([^:]+)(?::\d+)?;(\d+)
+        replacement: $1:$2
+        target_label: __address__
+---
+# Grafana for visualization
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: pqc-vpn
+  labels:
+    app: grafana
+    component: monitoring
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: grafana
+  template:
+    metadata:
+      labels:
+        app: grafana
+        component: monitoring
+    spec:
+      containers:
+      - name: grafana
+        image: grafana/grafana:10.2.0
+        ports:
+        - containerPort: 3000
+        env:
+        - name: GF_SECURITY_ADMIN_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: pqc-vpn-secrets
+              key: grafana-password
+        - name: GF_USERS_ALLOW_SIGN_UP
+          value: "false"
+        - name: GF_SECURITY_DISABLE_GRAVATAR
+          value: "true"
+        - name: GF_ANALYTICS_REPORTING_ENABLED
+          value: "false"
+        resources:
+          requests:
+            cpu: 200m
+            memory: 256Mi
+          limits:
+            cpu: 1000m
+            memory: 1Gi
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 472
+          readOnlyRootFilesystem: false
+          allowPrivilegeEscalation: false
+        volumeMounts:
+        - name: grafana-data
+          mountPath: /var/lib/grafana
+      volumes:
+      - name: grafana-data
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: pqc-vpn
+  labels:
+    app: grafana
+    component: monitoring
+spec:
+  selector:
+    app: grafana
+  ports:
+  - port: 3000
+    targetPort: 3000
+---
+# Network Policy for security
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: pqc-vpn-network-policy
+  namespace: pqc-vpn
+spec:
+  podSelector:
+    matchLabels:
+      app: pqc-vpn-hub
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - namespaceSelector: {}  # Allow from any namespace (for VPN clients)
+    ports:
+    - protocol: UDP
+      port: 500
+    - protocol: UDP
+      port: 4500
+  - from:
+    - podSelector:
+        matchLabels:
+          component: monitoring
+    ports:
+    - protocol: TCP
+      port: 9090
+  - from: []  # Allow web access from anywhere
+    ports:
+    - protocol: TCP
+      port: 8443
+  egress:
+  - to:
+    - podSelector:
+        matchLabels:
+          app: redis
+    ports:
+    - protocol: TCP
+      port: 6379
+  - to: []  # Allow all outbound (for certificate validation, etc.)
