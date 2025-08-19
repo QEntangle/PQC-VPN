@@ -1,0 +1,370 @@
+# Production-Ready PQC-VPN with Real Post-Quantum Cryptography
+# This docker-compose file deploys actual PQC algorithms, not simulated
+
+version: '3.8'
+
+services:
+  # Real PQC-VPN Hub with strongSwan + liboqs + OQS-OpenSSL
+  pqc-vpn-hub:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.pqc-hub
+    container_name: pqc-vpn-hub-real
+    hostname: pqc-hub
+    privileged: true
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    ports:
+      - "${VPN_PORT_IKE:-500}:500/udp"
+      - "${VPN_PORT_NATT:-4500}:4500/udp"
+      - "${WEB_PORT:-8443}:8443/tcp"
+      - "${API_PORT:-9090}:9090/tcp"
+    environment:
+      - HUB_IP=${HUB_IP:-192.168.1.100}
+      - HUB_DOMAIN=${HUB_DOMAIN:-pqc-hub.local}
+      - ORGANIZATION=${ORGANIZATION:-PQC-VPN-Enterprise}
+      - COUNTRY=${COUNTRY:-US}
+      - STATE=${STATE:-CA}
+      - LOCALITY=${LOCALITY:-San Francisco}
+      - PQC_KEM_ALGORITHM=${PQC_KEM_ALGORITHM:-kyber1024}
+      - PQC_SIG_ALGORITHM=${PQC_SIG_ALGORITHM:-dilithium5}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-pqc-admin-2025}
+      - SECRET_KEY=${SECRET_KEY}
+      - DEBIAN_FRONTEND=noninteractive
+    volumes:
+      - pqc-vpn-data:/opt/pqc-vpn/data
+      - pqc-vpn-logs:/var/log
+      - pqc-vpn-certs:/etc/ipsec.d
+      - /lib/modules:/lib/modules:ro
+    networks:
+      pqc-vpn-network:
+        ipv4_address: 172.20.1.1
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "/usr/local/strongswan/sbin/ipsec", "status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Real PQC Spoke Client - Alice
+  pqc-spoke-alice:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.pqc-spoke
+    container_name: pqc-spoke-alice
+    hostname: alice-client
+    privileged: true
+    cap_add:
+      - NET_ADMIN
+    environment:
+      - HUB_IP=${HUB_IP:-192.168.1.100}
+      - CLIENT_NAME=alice
+      - AUTH_TYPE=pki
+      - PQC_KEM_ALGORITHM=${PQC_KEM_ALGORITHM:-kyber1024}
+      - PQC_SIG_ALGORITHM=${PQC_SIG_ALGORITHM:-dilithium5}
+      - DEBIAN_FRONTEND=noninteractive
+    volumes:
+      - pqc-alice-data:/opt/pqc-client/data
+      - pqc-alice-certs:/etc/ipsec.d
+    networks:
+      pqc-vpn-network:
+        ipv4_address: 172.20.1.10
+    depends_on:
+      pqc-vpn-hub:
+        condition: service_healthy
+    restart: unless-stopped
+    profiles: ["clients", "demo"]
+
+  # Real PQC Spoke Client - Bob
+  pqc-spoke-bob:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.pqc-spoke
+    container_name: pqc-spoke-bob
+    hostname: bob-client
+    privileged: true
+    cap_add:
+      - NET_ADMIN
+    environment:
+      - HUB_IP=${HUB_IP:-192.168.1.100}
+      - CLIENT_NAME=bob
+      - AUTH_TYPE=psk
+      - PQC_KEM_ALGORITHM=${PQC_KEM_ALGORITHM:-kyber1024}
+      - PQC_SIG_ALGORITHM=${PQC_SIG_ALGORITHM:-dilithium5}
+      - DEBIAN_FRONTEND=noninteractive
+    volumes:
+      - pqc-bob-data:/opt/pqc-client/data
+      - pqc-bob-certs:/etc/ipsec.d
+    networks:
+      pqc-vpn-network:
+        ipv4_address: 172.20.1.11
+    depends_on:
+      pqc-vpn-hub:
+        condition: service_healthy
+    restart: unless-stopped
+    profiles: ["clients", "demo"]
+
+  # Real PQC Spoke Client - Charlie
+  pqc-spoke-charlie:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.pqc-spoke
+    container_name: pqc-spoke-charlie
+    hostname: charlie-client
+    privileged: true
+    cap_add:
+      - NET_ADMIN
+    environment:
+      - HUB_IP=${HUB_IP:-192.168.1.100}
+      - CLIENT_NAME=charlie
+      - AUTH_TYPE=hybrid
+      - PQC_KEM_ALGORITHM=${PQC_KEM_ALGORITHM:-kyber1024}
+      - PQC_SIG_ALGORITHM=${PQC_SIG_ALGORITHM:-dilithium5}
+      - DEBIAN_FRONTEND=noninteractive
+    volumes:
+      - pqc-charlie-data:/opt/pqc-client/data
+      - pqc-charlie-certs:/etc/ipsec.d
+    networks:
+      pqc-vpn-network:
+        ipv4_address: 172.20.1.12
+    depends_on:
+      pqc-vpn-hub:
+        condition: service_healthy
+    restart: unless-stopped
+    profiles: ["clients", "demo"]
+
+  # Redis for real-time data caching
+  redis:
+    image: redis:7-alpine
+    container_name: pqc-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - pqc-redis-data:/data
+    networks:
+      - pqc-vpn-network
+    restart: unless-stopped
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-pqc-redis-2025}
+
+  # PostgreSQL for production database
+  postgres:
+    image: postgres:15-alpine
+    container_name: pqc-postgres
+    environment:
+      - POSTGRES_DB=pqc_vpn
+      - POSTGRES_USER=pqc_admin
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-pqc-pg-2025}
+    volumes:
+      - pqc-postgres-data:/var/lib/postgresql/data
+      - ./sql/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - pqc-vpn-network
+    restart: unless-stopped
+    profiles: ["production", "enterprise"]
+
+  # Prometheus for metrics collection
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: pqc-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - pqc-prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=90d'
+      - '--web.enable-lifecycle'
+      - '--web.enable-admin-api'
+    networks:
+      - pqc-vpn-network
+    restart: unless-stopped
+    profiles: ["monitoring", "production"]
+
+  # Grafana for monitoring dashboards
+  grafana:
+    image: grafana/grafana:latest
+    container_name: pqc-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-pqc-grafana-2025}
+      - GF_INSTALL_PLUGINS=grafana-piechart-panel,grafana-worldmap-panel
+      - GF_SERVER_ROOT_URL=http://localhost:3000
+      - GF_FEATURE_TOGGLES_ENABLE=ngalert
+    volumes:
+      - pqc-grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources
+    networks:
+      - pqc-vpn-network
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+    profiles: ["monitoring", "production"]
+
+  # NGINX Load Balancer for High Availability
+  nginx-lb:
+    image: nginx:alpine
+    container_name: pqc-nginx-lb
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf
+      - ./nginx/ssl:/etc/nginx/ssl
+      - ./nginx/html:/usr/share/nginx/html
+    networks:
+      - pqc-vpn-network
+    depends_on:
+      - pqc-vpn-hub
+    restart: unless-stopped
+    profiles: ["production", "loadbalancer"]
+
+  # ELK Stack for Log Management
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+    container_name: pqc-elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    volumes:
+      - pqc-elasticsearch-data:/usr/share/elasticsearch/data
+    networks:
+      - pqc-vpn-network
+    restart: unless-stopped
+    profiles: ["logging", "enterprise"]
+
+  logstash:
+    image: docker.elastic.co/logstash/logstash:8.11.0
+    container_name: pqc-logstash
+    volumes:
+      - ./monitoring/logstash/pipeline:/usr/share/logstash/pipeline
+      - ./monitoring/logstash/config:/usr/share/logstash/config
+      - pqc-vpn-logs:/var/log/pqc-vpn:ro
+    networks:
+      - pqc-vpn-network
+    depends_on:
+      - elasticsearch
+    restart: unless-stopped
+    profiles: ["logging", "enterprise"]
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.11.0
+    container_name: pqc-kibana
+    ports:
+      - "5601:5601"
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+    networks:
+      - pqc-vpn-network
+    depends_on:
+      - elasticsearch
+    restart: unless-stopped
+    profiles: ["logging", "enterprise"]
+
+  # RADIUS Server for Enterprise Authentication
+  freeradius:
+    image: freeradius/freeradius-server:latest
+    container_name: pqc-freeradius
+    ports:
+      - "1812:1812/udp"
+      - "1813:1813/udp"
+    volumes:
+      - ./radius/clients.conf:/etc/freeradius/clients.conf
+      - ./radius/users:/etc/freeradius/users
+      - pqc-radius-data:/var/log/freeradius
+    networks:
+      - pqc-vpn-network
+    restart: unless-stopped
+    profiles: ["enterprise", "radius"]
+
+  # Enterprise Certificate Management
+  pqc-ca-manager:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.ca-manager
+    container_name: pqc-ca-manager
+    environment:
+      - CA_ROOT_PATH=/opt/pqc-ca
+      - PQC_ALGORITHMS_ENABLED=true
+      - HSM_ENABLED=${HSM_ENABLED:-false}
+      - HSM_PKCS11_LIB=${HSM_PKCS11_LIB}
+    volumes:
+      - pqc-ca-data:/opt/pqc-ca
+      - pqc-vpn-certs:/etc/ipsec.d
+    networks:
+      - pqc-vpn-network
+    restart: unless-stopped
+    profiles: ["enterprise", "ca"]
+
+volumes:
+  pqc-vpn-data:
+    driver: local
+  pqc-vpn-logs:
+    driver: local
+  pqc-vpn-certs:
+    driver: local
+  pqc-alice-data:
+    driver: local
+  pqc-alice-certs:
+    driver: local
+  pqc-bob-data:
+    driver: local
+  pqc-bob-certs:
+    driver: local
+  pqc-charlie-data:
+    driver: local
+  pqc-charlie-certs:
+    driver: local
+  pqc-redis-data:
+    driver: local
+  pqc-postgres-data:
+    driver: local
+  pqc-prometheus-data:
+    driver: local
+  pqc-grafana-data:
+    driver: local
+  pqc-elasticsearch-data:
+    driver: local
+  pqc-radius-data:
+    driver: local
+  pqc-ca-data:
+    driver: local
+
+networks:
+  pqc-vpn-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+          gateway: 172.20.0.1
+    driver_opts:
+      com.docker.network.bridge.name: pqc-br0
+      com.docker.network.bridge.enable_icc: "true"
+      com.docker.network.bridge.enable_ip_masquerade: "true"
+
+# Configuration profiles for different deployment scenarios
+# Usage examples:
+# 
+# Basic PQC VPN:
+#   docker-compose up -d pqc-vpn-hub
+#
+# Development with clients:
+#   docker-compose --profile demo up -d
+#
+# Production with monitoring:
+#   docker-compose --profile production --profile monitoring up -d
+#
+# Enterprise with all features:
+#   docker-compose --profile enterprise --profile monitoring --profile logging up -d
+#
+# High Availability:
+#   docker-compose --profile production --profile loadbalancer --profile monitoring up -d
