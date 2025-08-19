@@ -1,28 +1,28 @@
 #!/usr/bin/env python3
 """
 PQC-VPN Certificate Generation Tool with OpenSSL 3.5 Support
-Enterprise-grade certificate management for post-quantum cryptography readiness
+Enterprise-grade certificate management for post-quantum readiness
 
-Version: 3.0.0 - OpenSSL 3.5 Native Implementation
-Author: PQC-VPN Development Team
+Author: PQC-VPN Team
+Version: 3.0.0
 License: MIT
 """
 
 import os
 import sys
+import subprocess
+import argparse
 import json
 import logging
-import argparse
-import subprocess
 import tempfile
 import shutil
-from datetime import datetime, timedelta
 from pathlib import Path
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 import yaml
 
 # Configuration
-OPENSSL_PREFIX = os.environ.get('OPENSSL_PREFIX', '/usr/local/openssl35')
+OPENSSL_PREFIX = "/usr/local/openssl35"
 OPENSSL_BIN = f"{OPENSSL_PREFIX}/bin/openssl"
 OPENSSL_CONF = f"{OPENSSL_PREFIX}/ssl/openssl.cnf"
 IPSEC_DIR = "/etc/ipsec.d"
@@ -37,519 +37,530 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
         logging.FileHandler('/var/log/pqc-vpn/keygen.log'),
-        logging.StreamHandler()
+        logging.StreamHandler(sys.stdout)
     ]
 )
 logger = logging.getLogger(__name__)
 
-class OpenSSL35CertificateManager:
-    """Enterprise certificate manager using OpenSSL 3.5"""
+class OpenSSLError(Exception):
+    """Custom exception for OpenSSL operations"""
+    pass
+
+class PQCCertificateManager:
+    """
+    Enterprise certificate manager with OpenSSL 3.5 support
+    Handles CA, server, and client certificate generation
+    """
     
-    def __init__(self):
-        self.openssl_bin = OPENSSL_BIN
-        self.openssl_conf = OPENSSL_CONF
+    def __init__(self, openssl_bin: str = OPENSSL_BIN, openssl_conf: str = OPENSSL_CONF):
+        self.openssl_bin = openssl_bin
+        self.openssl_conf = openssl_conf
         self.validate_environment()
         
-    def validate_environment(self):
-        """Validate OpenSSL 3.5 environment"""
+    def validate_environment(self) -> None:
+        """Validate OpenSSL 3.5 installation and environment"""
+        if not os.path.exists(self.openssl_bin):
+            raise OpenSSLError(f"OpenSSL binary not found: {self.openssl_bin}")
+            
+        if not os.path.exists(self.openssl_conf):
+            raise OpenSSLError(f"OpenSSL config not found: {self.openssl_conf}")
+            
+        # Check OpenSSL version
         try:
-            # Check OpenSSL binary exists
-            if not os.path.exists(self.openssl_bin):
-                raise FileNotFoundError(f"OpenSSL binary not found: {self.openssl_bin}")
-            
-            # Check OpenSSL version
-            result = subprocess.run(
-                [self.openssl_bin, 'version'],
-                capture_output=True, text=True, check=True
-            )
-            version = result.stdout.strip()
-            logger.info(f"Using {version}")
-            
-            # Verify it's OpenSSL 3.5+
-            version_parts = version.split()[1].split('.')
-            major, minor = int(version_parts[0]), int(version_parts[1])
-            if major < 3 or (major == 3 and minor < 5):
-                logger.warning(f"OpenSSL version {version} may not support all enterprise features")
-            
-            # Check configuration file
-            if not os.path.exists(self.openssl_conf):
-                logger.warning(f"OpenSSL configuration not found: {self.openssl_conf}")
-                
-            # Set environment variables
-            os.environ['OPENSSL_CONF'] = self.openssl_conf
-            os.environ['LD_LIBRARY_PATH'] = f"{OPENSSL_PREFIX}/lib:{os.environ.get('LD_LIBRARY_PATH', '')}"
-            
-            logger.info("OpenSSL 3.5 environment validated successfully")
-            
+            result = self._run_openssl_command(['version'])
+            version = result.split()[1]
+            if not version.startswith('3.'):
+                raise OpenSSLError(f"OpenSSL 3.x required, found: {version}")
+            logger.info(f"OpenSSL version validated: {version}")
         except Exception as e:
-            logger.error(f"Environment validation failed: {e}")
-            raise
+            raise OpenSSLError(f"Failed to validate OpenSSL: {e}")
     
-    def run_openssl_command(self, args: List[str], input_data: str = None) -> Tuple[str, str]:
-        """Run OpenSSL command with proper environment"""
+    def _run_openssl_command(self, args: List[str], input_data: Optional[str] = None) -> str:
+        """Execute OpenSSL command with proper environment"""
+        env = os.environ.copy()
+        env.update({
+            'OPENSSL_CONF': self.openssl_conf,
+            'LD_LIBRARY_PATH': f"{OPENSSL_PREFIX}/lib:{env.get('LD_LIBRARY_PATH', '')}",
+            'PATH': f"{OPENSSL_PREFIX}/bin:{env.get('PATH', '')}"
+        })
+        
+        cmd = [self.openssl_bin] + args
+        logger.debug(f"Executing: {' '.join(cmd)}")
+        
         try:
-            cmd = [self.openssl_bin] + args
-            logger.debug(f"Running command: {' '.join(cmd)}")
-            
             result = subprocess.run(
                 cmd,
                 input=input_data,
-                capture_output=True,
                 text=True,
+                capture_output=True,
                 check=True,
-                env=os.environ.copy()
+                env=env
             )
-            
-            return result.stdout, result.stderr
-        
+            return result.stdout
         except subprocess.CalledProcessError as e:
-            logger.error(f"OpenSSL command failed: {e}")
-            logger.error(f"stdout: {e.stdout}")
-            logger.error(f"stderr: {e.stderr}")
-            raise
+            logger.error(f"OpenSSL command failed: {e.stderr}")
+            raise OpenSSLError(f"Command failed: {' '.join(cmd)}\nError: {e.stderr}")
     
-    def ensure_directories(self):
+    def _ensure_directories(self) -> None:
         """Ensure all required directories exist with proper permissions"""
         directories = [
             (CERT_DIR, 0o755),
             (PRIVATE_DIR, 0o700),
             (CA_DIR, 0o755),
             (CRL_DIR, 0o755),
-            ("/var/log/pqc-vpn", 0o755)
+            ('/var/log/pqc-vpn', 0o755)
         ]
         
         for directory, mode in directories:
-            os.makedirs(directory, mode=mode, exist_ok=True)
+            Path(directory).mkdir(parents=True, exist_ok=True)
             os.chmod(directory, mode)
-            logger.debug(f"Directory {directory} ready with mode {oct(mode)}")
+            logger.debug(f"Directory ensured: {directory} (mode: {oct(mode)})")
     
-    def generate_rsa_key(self, key_size: int = 4096, output_file: str = None) -> str:
-        """Generate RSA private key"""
-        logger.info(f"Generating RSA-{key_size} private key")
+    def generate_ca_certificate(self, 
+                              subject: str = "/C=US/ST=CA/L=San Francisco/O=PQC-VPN Enterprise/OU=Certificate Authority/CN=PQC-VPN Root CA",
+                              key_type: str = "rsa",
+                              key_size: int = 4096,
+                              validity_days: int = 3650,
+                              force: bool = False) -> Tuple[str, str]:
+        """
+        Generate Certificate Authority certificate with OpenSSL 3.5
         
-        args = ['genrsa', '-out', output_file or '/dev/stdout', str(key_size)]
-        
-        if output_file:
-            self.run_openssl_command(args)
-            os.chmod(output_file, 0o600)
-            logger.info(f"RSA key saved to {output_file}")
-            return output_file
-        else:
-            stdout, _ = self.run_openssl_command(args)
-            return stdout
-    
-    def generate_ecdsa_key(self, curve: str = 'secp384r1', output_file: str = None) -> str:
-        """Generate ECDSA private key"""
-        logger.info(f"Generating ECDSA key with curve {curve}")
-        
-        # Generate parameters first
-        with tempfile.NamedTemporaryFile(mode='w', delete=False) as param_file:
-            param_args = ['ecparam', '-name', curve, '-out', param_file.name]
-            self.run_openssl_command(param_args)
+        Args:
+            subject: Certificate subject DN
+            key_type: Key type (rsa, ec)
+            key_size: Key size for RSA (2048, 3072, 4096) or EC curve name
+            validity_days: Certificate validity period
+            force: Overwrite existing CA
             
-            # Generate key
-            key_args = ['ecparam', '-in', param_file.name, '-genkey']
-            if output_file:
-                key_args.extend(['-out', output_file])
-                self.run_openssl_command(key_args)
-                os.chmod(output_file, 0o600)
-                logger.info(f"ECDSA key saved to {output_file}")
-                result = output_file
+        Returns:
+            Tuple of (ca_cert_path, ca_key_path)
+        """
+        self._ensure_directories()
+        
+        ca_key_path = f"{PRIVATE_DIR}/ca-key.pem"
+        ca_cert_path = f"{CA_DIR}/ca-cert.pem"
+        
+        # Check if CA already exists
+        if os.path.exists(ca_cert_path) and not force:
+            logger.info("CA certificate already exists. Use --force to overwrite.")
+            return ca_cert_path, ca_key_path
+        
+        logger.info(f"Generating CA certificate with {key_type} key...")
+        
+        try:
+            # Generate CA private key
+            if key_type.lower() == "rsa":
+                self._run_openssl_command([
+                    'genrsa', '-out', ca_key_path, str(key_size)
+                ])
+                logger.info(f"Generated RSA-{key_size} CA private key")
+            elif key_type.lower() == "ec":
+                curve_name = key_size if isinstance(key_size, str) else "secp384r1"
+                self._run_openssl_command([
+                    'ecparam', '-genkey', '-name', curve_name, '-out', ca_key_path
+                ])
+                logger.info(f"Generated EC {curve_name} CA private key")
             else:
-                stdout, _ = self.run_openssl_command(key_args)
-                result = stdout
+                raise OpenSSLError(f"Unsupported key type: {key_type}")
             
-            # Cleanup
-            os.unlink(param_file.name)
-            return result
+            # Generate CA certificate
+            ca_config = self._create_ca_config(subject, validity_days)
+            
+            self._run_openssl_command([
+                'req', '-new', '-x509',
+                '-key', ca_key_path,
+                '-out', ca_cert_path,
+                '-days', str(validity_days),
+                '-config', ca_config,
+                '-extensions', 'v3_ca',
+                '-subj', subject
+            ])
+            
+            # Set proper permissions
+            os.chmod(ca_key_path, 0o600)
+            os.chmod(ca_cert_path, 0o644)
+            
+            # Verify certificate
+            cert_info = self._get_certificate_info(ca_cert_path)
+            logger.info(f"CA certificate generated successfully")
+            logger.info(f"Subject: {cert_info['subject']}")
+            logger.info(f"Valid until: {cert_info['not_after']}")
+            
+            # Initialize CA database
+            self._initialize_ca_database()
+            
+            return ca_cert_path, ca_key_path
+            
+        except Exception as e:
+            logger.error(f"Failed to generate CA certificate: {e}")
+            raise
     
-    def generate_ed25519_key(self, output_file: str = None) -> str:
-        """Generate Ed25519 private key"""
-        logger.info("Generating Ed25519 private key")
+    def generate_server_certificate(self,
+                                  hostname: str,
+                                  subject: str = None,
+                                  san_list: List[str] = None,
+                                  key_type: str = "rsa",
+                                  key_size: int = 4096,
+                                  validity_days: int = 365) -> Tuple[str, str]:
+        """
+        Generate server certificate signed by CA
         
-        args = ['genpkey', '-algorithm', 'Ed25519']
-        if output_file:
-            args.extend(['-out', output_file])
-            self.run_openssl_command(args)
-            os.chmod(output_file, 0o600)
-            logger.info(f"Ed25519 key saved to {output_file}")
-            return output_file
+        Args:
+            hostname: Server hostname (used in CN and SAN)
+            subject: Certificate subject DN (auto-generated if None)
+            san_list: List of Subject Alternative Names
+            key_type: Key type (rsa, ec)
+            key_size: Key size or curve name
+            validity_days: Certificate validity period
+            
+        Returns:
+            Tuple of (cert_path, key_path)
+        """
+        self._ensure_directories()
+        
+        if subject is None:
+            subject = f"/C=US/ST=CA/L=San Francisco/O=PQC-VPN Enterprise/OU=VPN Server/CN={hostname}"
+        
+        if san_list is None:
+            san_list = ['localhost', hostname, f'*.{hostname}']
+        
+        cert_path = f"{CERT_DIR}/{hostname}-cert.pem"
+        key_path = f"{PRIVATE_DIR}/{hostname}-key.pem"
+        csr_path = f"/tmp/{hostname}-csr.pem"
+        
+        logger.info(f"Generating server certificate for {hostname}...")
+        
+        try:
+            # Generate server private key
+            if key_type.lower() == "rsa":
+                self._run_openssl_command([
+                    'genrsa', '-out', key_path, str(key_size)
+                ])
+            elif key_type.lower() == "ec":
+                curve_name = key_size if isinstance(key_size, str) else "secp384r1"
+                self._run_openssl_command([
+                    'ecparam', '-genkey', '-name', curve_name, '-out', key_path
+                ])
+            
+            # Generate certificate signing request
+            self._run_openssl_command([
+                'req', '-new',
+                '-key', key_path,
+                '-out', csr_path,
+                '-subj', subject,
+                '-config', self.openssl_conf
+            ])
+            
+            # Create server certificate extension config
+            ext_config = self._create_server_ext_config(san_list)
+            
+            # Sign certificate with CA
+            ca_cert_path = f"{CA_DIR}/ca-cert.pem"
+            ca_key_path = f"{PRIVATE_DIR}/ca-key.pem"
+            
+            if not os.path.exists(ca_cert_path):
+                raise OpenSSLError("CA certificate not found. Generate CA first.")
+            
+            self._run_openssl_command([
+                'x509', '-req',
+                '-in', csr_path,
+                '-CA', ca_cert_path,
+                '-CAkey', ca_key_path,
+                '-CAcreateserial',
+                '-out', cert_path,
+                '-days', str(validity_days),
+                '-extensions', 'server_cert',
+                '-extfile', ext_config
+            ])
+            
+            # Set proper permissions
+            os.chmod(key_path, 0o600)
+            os.chmod(cert_path, 0o644)
+            
+            # Clean up
+            os.unlink(csr_path)
+            os.unlink(ext_config)
+            
+            # Verify certificate
+            cert_info = self._get_certificate_info(cert_path)
+            logger.info(f"Server certificate generated successfully")
+            logger.info(f"Subject: {cert_info['subject']}")
+            logger.info(f"SAN: {', '.join(san_list)}")
+            logger.info(f"Valid until: {cert_info['not_after']}")
+            
+            return cert_path, key_path
+            
+        except Exception as e:
+            logger.error(f"Failed to generate server certificate: {e}")
+            # Clean up on failure
+            for path in [csr_path, cert_path, key_path]:
+                if os.path.exists(path):
+                    os.unlink(path)
+            raise
+    
+    def generate_client_certificate(self,
+                                   client_name: str,
+                                   email: str = None,
+                                   subject: str = None,
+                                   key_type: str = "rsa",
+                                   key_size: int = 4096,
+                                   validity_days: int = 365) -> Tuple[str, str]:
+        """
+        Generate client certificate for VPN authentication
+        
+        Args:
+            client_name: Client identifier
+            email: Client email address
+            subject: Certificate subject DN (auto-generated if None)
+            key_type: Key type (rsa, ec)
+            key_size: Key size or curve name
+            validity_days: Certificate validity period
+            
+        Returns:
+            Tuple of (cert_path, key_path)
+        """
+        self._ensure_directories()
+        
+        if subject is None:
+            email_part = f"/emailAddress={email}" if email else ""
+            subject = f"/C=US/ST=CA/L=San Francisco/O=PQC-VPN Enterprise/OU=VPN Client/CN={client_name}{email_part}"
+        
+        cert_path = f"{CERT_DIR}/{client_name}-cert.pem"
+        key_path = f"{PRIVATE_DIR}/{client_name}-key.pem"
+        csr_path = f"/tmp/{client_name}-csr.pem"
+        
+        logger.info(f"Generating client certificate for {client_name}...")
+        
+        try:
+            # Generate client private key
+            if key_type.lower() == "rsa":
+                self._run_openssl_command([
+                    'genrsa', '-out', key_path, str(key_size)
+                ])
+            elif key_type.lower() == "ec":
+                curve_name = key_size if isinstance(key_size, str) else "secp256r1"
+                self._run_openssl_command([
+                    'ecparam', '-genkey', '-name', curve_name, '-out', key_path
+                ])
+            
+            # Generate certificate signing request
+            self._run_openssl_command([
+                'req', '-new',
+                '-key', key_path,
+                '-out', csr_path,
+                '-subj', subject,
+                '-config', self.openssl_conf
+            ])
+            
+            # Create client certificate extension config
+            ext_config = self._create_client_ext_config(email)
+            
+            # Sign certificate with CA
+            ca_cert_path = f"{CA_DIR}/ca-cert.pem"
+            ca_key_path = f"{PRIVATE_DIR}/ca-key.pem"
+            
+            if not os.path.exists(ca_cert_path):
+                raise OpenSSLError("CA certificate not found. Generate CA first.")
+            
+            self._run_openssl_command([
+                'x509', '-req',
+                '-in', csr_path,
+                '-CA', ca_cert_path,
+                '-CAkey', ca_key_path,
+                '-CAcreateserial',
+                '-out', cert_path,
+                '-days', str(validity_days),
+                '-extensions', 'client_cert',
+                '-extfile', ext_config
+            ])
+            
+            # Set proper permissions
+            os.chmod(key_path, 0o600)
+            os.chmod(cert_path, 0o644)
+            
+            # Clean up
+            os.unlink(csr_path)
+            os.unlink(ext_config)
+            
+            # Verify certificate
+            cert_info = self._get_certificate_info(cert_path)
+            logger.info(f"Client certificate generated successfully")
+            logger.info(f"Subject: {cert_info['subject']}")
+            logger.info(f"Valid until: {cert_info['not_after']}")
+            
+            return cert_path, key_path
+            
+        except Exception as e:
+            logger.error(f"Failed to generate client certificate: {e}")
+            # Clean up on failure
+            for path in [csr_path, cert_path, key_path]:
+                if os.path.exists(path):
+                    os.unlink(path)
+            raise
+    
+    def create_pkcs12(self, cert_path: str, key_path: str, 
+                      ca_cert_path: str = None, password: str = None) -> str:
+        """
+        Create PKCS#12 bundle for client distribution
+        
+        Args:
+            cert_path: Client certificate path
+            key_path: Client private key path
+            ca_cert_path: CA certificate path (optional)
+            password: PKCS#12 password (optional)
+            
+        Returns:
+            Path to PKCS#12 file
+        """
+        if ca_cert_path is None:
+            ca_cert_path = f"{CA_DIR}/ca-cert.pem"
+        
+        basename = os.path.basename(cert_path).replace('-cert.pem', '')
+        p12_path = f"{CERT_DIR}/{basename}.p12"
+        
+        cmd = [
+            'pkcs12', '-export',
+            '-out', p12_path,
+            '-inkey', key_path,
+            '-in', cert_path
+        ]
+        
+        if os.path.exists(ca_cert_path):
+            cmd.extend(['-certfile', ca_cert_path])
+        
+        if password:
+            cmd.extend(['-passout', f'pass:{password}'])
         else:
-            stdout, _ = self.run_openssl_command(args)
-            return stdout
-    
-    def create_certificate_request(self, private_key: str, subject: str, 
-                                 san_list: List[str] = None, output_file: str = None) -> str:
-        """Create certificate signing request"""
-        logger.info(f"Creating certificate request for {subject}")
+            cmd.extend(['-passout', 'pass:'])
         
-        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.conf') as conf_file:
-            # Create CSR configuration
-            config = f"""[req]
+        self._run_openssl_command(cmd)
+        
+        logger.info(f"PKCS#12 bundle created: {p12_path}")
+        return p12_path
+    
+    def revoke_certificate(self, cert_path: str, reason: str = "unspecified") -> None:
+        """
+        Revoke a certificate and update CRL
+        
+        Args:
+            cert_path: Path to certificate to revoke
+            reason: Revocation reason
+        """
+        ca_key_path = f"{PRIVATE_DIR}/ca-key.pem"
+        ca_cert_path = f"{CA_DIR}/ca-cert.pem"
+        crl_path = f"{CRL_DIR}/ca.crl"
+        
+        # Add certificate to revocation database
+        self._run_openssl_command([
+            'ca', '-revoke', cert_path,
+            '-keyfile', ca_key_path,
+            '-cert', ca_cert_path,
+            '-config', self.openssl_conf,
+            '-crl_reason', reason
+        ])
+        
+        # Generate updated CRL
+        self._run_openssl_command([
+            'ca', '-gencrl',
+            '-keyfile', ca_key_path,
+            '-cert', ca_cert_path,
+            '-out', crl_path,
+            '-config', self.openssl_conf
+        ])
+        
+        logger.info(f"Certificate revoked and CRL updated: {cert_path}")
+    
+    def verify_certificate(self, cert_path: str, ca_cert_path: str = None) -> bool:
+        """
+        Verify certificate against CA
+        
+        Args:
+            cert_path: Certificate to verify
+            ca_cert_path: CA certificate (optional)
+            
+        Returns:
+            True if valid, False otherwise
+        """
+        if ca_cert_path is None:
+            ca_cert_path = f"{CA_DIR}/ca-cert.pem"
+        
+        try:
+            self._run_openssl_command([
+                'verify', '-CAfile', ca_cert_path, cert_path
+            ])
+            logger.info(f"Certificate verification successful: {cert_path}")
+            return True
+        except OpenSSLError:
+            logger.error(f"Certificate verification failed: {cert_path}")
+            return False
+    
+    def _create_ca_config(self, subject: str, validity_days: int) -> str:
+        """Create CA configuration file"""
+        config_content = f"""
+[req]
 distinguished_name = req_distinguished_name
-req_extensions = v3_req
+req_extensions = v3_ca
 prompt = no
 
 [req_distinguished_name]
-{self._parse_subject_to_dn(subject)}
 
-[v3_req]
-basicConstraints = CA:FALSE
-keyUsage = nonRepudiation, digitalSignature, keyEncipherment
-"""
-            
-            if san_list:
-                config += "subjectAltName = @alt_names\n\n[alt_names]\n"
-                for i, san in enumerate(san_list, 1):
-                    if san.startswith('IP:'):
-                        config += f"IP.{i} = {san[3:]}\n"
-                    else:
-                        config += f"DNS.{i} = {san}\n"
-            
-            conf_file.write(config)
-            conf_file.flush()
-            
-            args = ['req', '-new', '-key', private_key, '-config', conf_file.name]
-            if output_file:
-                args.extend(['-out', output_file])
-                self.run_openssl_command(args)
-                logger.info(f"CSR saved to {output_file}")
-                result = output_file
-            else:
-                stdout, _ = self.run_openssl_command(args)
-                result = stdout
-            
-            # Cleanup
-            os.unlink(conf_file.name)
-            return result
-    
-    def _parse_subject_to_dn(self, subject: str) -> str:
-        """Convert subject string to distinguished name format"""
-        # Handle subjects like "/C=US/ST=CA/O=Company/CN=example.com"
-        if subject.startswith('/'):
-            parts = subject[1:].split('/')
-            dn_parts = []
-            for part in parts:
-                if '=' in part:
-                    key, value = part.split('=', 1)
-                    dn_parts.append(f"{key} = {value}")
-            return '\n'.join(dn_parts)
-        else:
-            # Assume it's already in proper format or just a CN
-            if '=' not in subject:
-                return f"CN = {subject}"
-            return subject.replace('/', '\n').replace('=', ' = ')
-    
-    def sign_certificate(self, csr: str, ca_cert: str, ca_key: str, 
-                        days: int = 365, extensions: str = None, 
-                        output_file: str = None) -> str:
-        """Sign certificate with CA"""
-        logger.info(f"Signing certificate for {days} days")
-        
-        args = ['x509', '-req', '-in', csr, '-CA', ca_cert, '-CAkey', ca_key,
-                '-CAcreateserial', '-days', str(days)]
-        
-        if extensions:
-            with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.conf') as ext_file:
-                ext_file.write(extensions)
-                ext_file.flush()
-                args.extend(['-extensions', 'cert_ext', '-extfile', ext_file.name])
-                
-                if output_file:
-                    args.extend(['-out', output_file])
-                    self.run_openssl_command(args)
-                    logger.info(f"Certificate saved to {output_file}")
-                    result = output_file
-                else:
-                    stdout, _ = self.run_openssl_command(args)
-                    result = stdout
-                
-                os.unlink(ext_file.name)
-                return result
-        else:
-            if output_file:
-                args.extend(['-out', output_file])
-                self.run_openssl_command(args)
-                logger.info(f"Certificate saved to {output_file}")
-                return output_file
-            else:
-                stdout, _ = self.run_openssl_command(args)
-                return stdout
-    
-    def create_self_signed_certificate(self, private_key: str, subject: str, 
-                                     days: int = 3650, san_list: List[str] = None,
-                                     output_file: str = None, is_ca: bool = False) -> str:
-        """Create self-signed certificate"""
-        logger.info(f"Creating self-signed certificate for {subject}")
-        
-        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.conf') as conf_file:
-            config = f"""[req]
-distinguished_name = req_distinguished_name
-x509_extensions = v3_ext
-prompt = no
-
-[req_distinguished_name]
-{self._parse_subject_to_dn(subject)}
-
-[v3_ext]
-"""
-            if is_ca:
-                config += """basicConstraints = critical,CA:TRUE
+[v3_ca]
+basicConstraints = critical, CA:TRUE
 keyUsage = critical, keyCertSign, cRLSign
 subjectKeyIdentifier = hash
 authorityKeyIdentifier = keyid:always,issuer:always
+certificatePolicies = @ca_policy
+
+[ca_policy]
+policyIdentifier = 2.23.140.1.2.1
+CPS.1 = "https://pqc-vpn.local/cps"
 """
+        
+        fd, config_path = tempfile.mkstemp(suffix='.cnf', text=True)
+        with os.fdopen(fd, 'w') as f:
+            f.write(config_content)
+        
+        return config_path
+    
+    def _create_server_ext_config(self, san_list: List[str]) -> str:
+        """Create server certificate extension configuration"""
+        san_entries = []
+        dns_count = 1
+        ip_count = 1
+        
+        for san in san_list:
+            if self._is_ip_address(san):
+                san_entries.append(f"IP.{ip_count} = {san}")
+                ip_count += 1
             else:
-                config += """basicConstraints = CA:FALSE
-keyUsage = nonRepudiation, digitalSignature, keyEncipherment
-subjectKeyIdentifier = hash
-authorityKeyIdentifier = keyid,issuer:always
-extendedKeyUsage = serverAuth, clientAuth
-"""
-            
-            if san_list:
-                config += "subjectAltName = @alt_names\n\n[alt_names]\n"
-                for i, san in enumerate(san_list, 1):
-                    if san.startswith('IP:'):
-                        config += f"IP.{i} = {san[3:]}\n"
-                    else:
-                        config += f"DNS.{i} = {san}\n"
-            
-            conf_file.write(config)
-            conf_file.flush()
-            
-            args = ['req', '-new', '-x509', '-key', private_key, '-config', conf_file.name,
-                    '-days', str(days)]
-            
-            if output_file:
-                args.extend(['-out', output_file])
-                self.run_openssl_command(args)
-                logger.info(f"Self-signed certificate saved to {output_file}")
-                result = output_file
-            else:
-                stdout, _ = self.run_openssl_command(args)
-                result = stdout
-            
-            os.unlink(conf_file.name)
-            return result
-    
-    def get_certificate_info(self, cert_file: str) -> Dict:
-        """Get certificate information"""
-        try:
-            # Get subject
-            stdout, _ = self.run_openssl_command(['x509', '-in', cert_file, '-noout', '-subject'])
-            subject = stdout.strip().replace('subject=', '')
-            
-            # Get issuer
-            stdout, _ = self.run_openssl_command(['x509', '-in', cert_file, '-noout', '-issuer'])
-            issuer = stdout.strip().replace('issuer=', '')
-            
-            # Get dates
-            stdout, _ = self.run_openssl_command(['x509', '-in', cert_file, '-noout', '-dates'])
-            dates = {}
-            for line in stdout.strip().split('\n'):
-                if '=' in line:
-                    key, value = line.split('=', 1)
-                    dates[key] = value
-            
-            # Get serial number
-            stdout, _ = self.run_openssl_command(['x509', '-in', cert_file, '-noout', '-serial'])
-            serial = stdout.strip().replace('serial=', '')
-            
-            # Get fingerprint
-            stdout, _ = self.run_openssl_command(['x509', '-in', cert_file, '-noout', '-fingerprint', '-sha256'])
-            fingerprint = stdout.strip().replace('SHA256 Fingerprint=', '')
-            
-            # Get key usage
-            try:
-                stdout, _ = self.run_openssl_command(['x509', '-in', cert_file, '-noout', '-ext', 'keyUsage'])
-                key_usage = stdout.strip()
-            except:
-                key_usage = "Not available"
-            
-            return {
-                'subject': subject,
-                'issuer': issuer,
-                'dates': dates,
-                'serial': serial,
-                'fingerprint': fingerprint,
-                'key_usage': key_usage,
-                'file': cert_file
-            }
-            
-        except Exception as e:
-            logger.error(f"Failed to get certificate info: {e}")
-            return {}
-    
-    def verify_certificate(self, cert_file: str, ca_file: str = None) -> bool:
-        """Verify certificate against CA"""
-        try:
-            args = ['verify']
-            if ca_file:
-                args.extend(['-CAfile', ca_file])
-            args.append(cert_file)
-            
-            self.run_openssl_command(args)
-            logger.info(f"Certificate {cert_file} verification passed")
-            return True
-            
-        except subprocess.CalledProcessError:
-            logger.error(f"Certificate {cert_file} verification failed")
-            return False
-    
-    def generate_ca_certificate(self, key_type: str = 'rsa', key_size: int = 4096,
-                              subject: str = None, days: int = 3650) -> Tuple[str, str]:
-        """Generate CA certificate and key"""
-        self.ensure_directories()
+                san_entries.append(f"DNS.{dns_count} = {san}")
+                dns_count += 1
         
-        ca_key_file = f"{PRIVATE_DIR}/ca-key.pem"
-        ca_cert_file = f"{CA_DIR}/ca-cert.pem"
-        
-        # Default subject for CA
-        if not subject:
-            subject = "/C=US/ST=California/L=San Francisco/O=PQC-VPN Enterprise/OU=Certificate Authority/CN=PQC-VPN Root CA"
-        
-        logger.info("Generating Certificate Authority")
-        
-        # Generate CA private key
-        if key_type.lower() == 'rsa':
-            self.generate_rsa_key(key_size, ca_key_file)
-        elif key_type.lower() == 'ecdsa':
-            curve = 'secp384r1' if key_size >= 384 else 'secp256r1'
-            self.generate_ecdsa_key(curve, ca_key_file)
-        elif key_type.lower() == 'ed25519':
-            self.generate_ed25519_key(ca_key_file)
-        else:
-            raise ValueError(f"Unsupported key type: {key_type}")
-        
-        # Generate CA certificate
-        self.create_self_signed_certificate(
-            ca_key_file, subject, days, is_ca=True, output_file=ca_cert_file
-        )
-        
-        # Set proper permissions
-        os.chmod(ca_key_file, 0o600)
-        os.chmod(ca_cert_file, 0o644)
-        
-        logger.info(f"CA certificate generated: {ca_cert_file}")
-        return ca_cert_file, ca_key_file
-    
-    def generate_server_certificate(self, hostname: str, ip_addresses: List[str] = None,
-                                   dns_names: List[str] = None, key_type: str = 'rsa',
-                                   key_size: int = 4096, days: int = 365) -> Tuple[str, str]:
-        """Generate server certificate"""
-        self.ensure_directories()
-        
-        server_key_file = f"{PRIVATE_DIR}/{hostname}-key.pem"
-        server_cert_file = f"{CERT_DIR}/{hostname}-cert.pem"
-        ca_cert_file = f"{CA_DIR}/ca-cert.pem"
-        ca_key_file = f"{PRIVATE_DIR}/ca-key.pem"
-        
-        # Check if CA exists
-        if not os.path.exists(ca_cert_file) or not os.path.exists(ca_key_file):
-            logger.info("CA not found, generating new CA")
-            self.generate_ca_certificate(key_type, key_size)
-        
-        subject = f"/C=US/ST=California/L=San Francisco/O=PQC-VPN Enterprise/OU=VPN Server/CN={hostname}"
-        
-        logger.info(f"Generating server certificate for {hostname}")
-        
-        # Generate server private key
-        if key_type.lower() == 'rsa':
-            self.generate_rsa_key(key_size, server_key_file)
-        elif key_type.lower() == 'ecdsa':
-            curve = 'secp384r1' if key_size >= 384 else 'secp256r1'
-            self.generate_ecdsa_key(curve, server_key_file)
-        elif key_type.lower() == 'ed25519':
-            self.generate_ed25519_key(server_key_file)
-        else:
-            raise ValueError(f"Unsupported key type: {key_type}")
-        
-        # Prepare SAN list
-        san_list = [hostname, 'localhost']
-        if dns_names:
-            san_list.extend(dns_names)
-        if ip_addresses:
-            san_list.extend([f"IP:{ip}" for ip in ip_addresses])
-        
-        # Create CSR
-        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.csr') as csr_file:
-            self.create_certificate_request(server_key_file, subject, san_list, csr_file.name)
-            
-            # Create certificate extensions
-            extensions = f"""[cert_ext]
+        config_content = f"""
 basicConstraints = CA:FALSE
 nsCertType = server
 nsComment = "PQC-VPN Server Certificate"
 subjectKeyIdentifier = hash
 authorityKeyIdentifier = keyid,issuer:always
 keyUsage = critical, digitalSignature, keyEncipherment, keyAgreement
-extendedKeyUsage = serverAuth, clientAuth
+extendedKeyUsage = serverAuth
 subjectAltName = @alt_names
 
 [alt_names]
+{chr(10).join(san_entries)}
 """
-            for i, san in enumerate(san_list, 1):
-                if san.startswith('IP:'):
-                    extensions += f"IP.{i} = {san[3:]}\n"
-                else:
-                    extensions += f"DNS.{i} = {san}\n"
-            
-            # Sign certificate
-            self.sign_certificate(
-                csr_file.name, ca_cert_file, ca_key_file, 
-                days, extensions, server_cert_file
-            )
-            
-            # Cleanup
-            os.unlink(csr_file.name)
         
-        # Set proper permissions
-        os.chmod(server_key_file, 0o600)
-        os.chmod(server_cert_file, 0o644)
+        fd, config_path = tempfile.mkstemp(suffix='.cnf', text=True)
+        with os.fdopen(fd, 'w') as f:
+            f.write(config_content)
         
-        logger.info(f"Server certificate generated: {server_cert_file}")
-        return server_cert_file, server_key_file
+        return config_path
     
-    def generate_client_certificate(self, username: str, email: str = None,
-                                   key_type: str = 'rsa', key_size: int = 2048,
-                                   days: int = 365) -> Tuple[str, str]:
-        """Generate client certificate"""
-        self.ensure_directories()
+    def _create_client_ext_config(self, email: str = None) -> str:
+        """Create client certificate extension configuration"""
+        email_san = f"email.1 = {email}" if email else ""
         
-        client_key_file = f"{PRIVATE_DIR}/{username}-key.pem"
-        client_cert_file = f"{CERT_DIR}/{username}-cert.pem"
-        ca_cert_file = f"{CA_DIR}/ca-cert.pem"
-        ca_key_file = f"{PRIVATE_DIR}/ca-key.pem"
-        
-        # Check if CA exists
-        if not os.path.exists(ca_cert_file) or not os.path.exists(ca_key_file):
-            logger.info("CA not found, generating new CA")
-            self.generate_ca_certificate()
-        
-        subject = f"/C=US/ST=California/L=San Francisco/O=PQC-VPN Enterprise/OU=VPN Client/CN={username}"
-        if email:
-            subject += f"/emailAddress={email}"
-        
-        logger.info(f"Generating client certificate for {username}")
-        
-        # Generate client private key
-        if key_type.lower() == 'rsa':
-            self.generate_rsa_key(key_size, client_key_file)
-        elif key_type.lower() == 'ecdsa':
-            curve = 'secp256r1' if key_size <= 256 else 'secp384r1'
-            self.generate_ecdsa_key(curve, client_key_file)
-        elif key_type.lower() == 'ed25519':
-            self.generate_ed25519_key(client_key_file)
-        else:
-            raise ValueError(f"Unsupported key type: {key_type}")
-        
-        # Create CSR
-        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.csr') as csr_file:
-            self.create_certificate_request(client_key_file, subject, output_file=csr_file.name)
-            
-            # Create certificate extensions
-            extensions = f"""[cert_ext]
+        config_content = f"""
 basicConstraints = CA:FALSE
 nsCertType = client, email
 nsComment = "PQC-VPN Client Certificate"
@@ -557,263 +568,369 @@ subjectKeyIdentifier = hash
 authorityKeyIdentifier = keyid,issuer:always
 keyUsage = critical, digitalSignature
 extendedKeyUsage = clientAuth, emailProtection
+{f'subjectAltName = @alt_names' if email else ''}
+
+{f'[alt_names]' if email else ''}
+{email_san}
 """
-            
-            # Sign certificate
-            self.sign_certificate(
-                csr_file.name, ca_cert_file, ca_key_file,
-                days, extensions, client_cert_file
-            )
-            
-            # Cleanup
-            os.unlink(csr_file.name)
         
-        # Set proper permissions
-        os.chmod(client_key_file, 0o600)
-        os.chmod(client_cert_file, 0o644)
+        fd, config_path = tempfile.mkstemp(suffix='.cnf', text=True)
+        with os.fdopen(fd, 'w') as f:
+            f.write(config_content)
         
-        logger.info(f"Client certificate generated: {client_cert_file}")
-        return client_cert_file, client_key_file
+        return config_path
     
-    def list_certificates(self) -> List[Dict]:
-        """List all certificates with information"""
+    def _initialize_ca_database(self) -> None:
+        """Initialize CA database files"""
+        ca_dir = f"{OPENSSL_PREFIX}/ssl"
+        
+        # Create index file
+        index_file = f"{ca_dir}/index.txt"
+        if not os.path.exists(index_file):
+            Path(index_file).touch()
+        
+        # Create serial file
+        serial_file = f"{ca_dir}/serial"
+        if not os.path.exists(serial_file):
+            with open(serial_file, 'w') as f:
+                f.write('1000\n')
+        
+        # Create CRL number file
+        crlnumber_file = f"{ca_dir}/crlnumber"
+        if not os.path.exists(crlnumber_file):
+            with open(crlnumber_file, 'w') as f:
+                f.write('1000\n')
+    
+    def _get_certificate_info(self, cert_path: str) -> Dict[str, str]:
+        """Get certificate information"""
+        try:
+            # Get subject
+            subject = self._run_openssl_command([
+                'x509', '-in', cert_path, '-noout', '-subject'
+            ]).strip().replace('subject=', '')
+            
+            # Get issuer
+            issuer = self._run_openssl_command([
+                'x509', '-in', cert_path, '-noout', '-issuer'
+            ]).strip().replace('issuer=', '')
+            
+            # Get dates
+            dates = self._run_openssl_command([
+                'x509', '-in', cert_path, '-noout', '-dates'
+            ]).strip().split('\n')
+            
+            not_before = dates[0].replace('notBefore=', '')
+            not_after = dates[1].replace('notAfter=', '')
+            
+            return {
+                'subject': subject,
+                'issuer': issuer,
+                'not_before': not_before,
+                'not_after': not_after
+            }
+        except Exception as e:
+            logger.error(f"Failed to get certificate info: {e}")
+            return {}
+    
+    def _is_ip_address(self, address: str) -> bool:
+        """Check if string is an IP address"""
+        import ipaddress
+        try:
+            ipaddress.ip_address(address)
+            return True
+        except ValueError:
+            return False
+    
+    def list_certificates(self) -> List[Dict[str, str]]:
+        """List all certificates with their information"""
         certificates = []
         
-        # Check certificate directory
-        if os.path.exists(CERT_DIR):
-            for cert_file in Path(CERT_DIR).glob("*.pem"):
-                cert_info = self.get_certificate_info(str(cert_file))
-                if cert_info:
-                    certificates.append(cert_info)
-        
-        # Check CA directory
-        if os.path.exists(CA_DIR):
-            for cert_file in Path(CA_DIR).glob("*.pem"):
-                cert_info = self.get_certificate_info(str(cert_file))
-                if cert_info:
-                    cert_info['type'] = 'CA'
-                    certificates.append(cert_info)
+        for cert_file in Path(CERT_DIR).glob("*.pem"):
+            if cert_file.name.endswith('-cert.pem'):
+                cert_info = self._get_certificate_info(str(cert_file))
+                cert_info['file'] = str(cert_file)
+                cert_info['name'] = cert_file.name.replace('-cert.pem', '')
+                certificates.append(cert_info)
         
         return certificates
     
-    def export_certificate_bundle(self, cert_name: str, output_format: str = 'p12',
-                                 password: str = None) -> str:
-        """Export certificate bundle"""
-        cert_file = f"{CERT_DIR}/{cert_name}-cert.pem"
-        key_file = f"{PRIVATE_DIR}/{cert_name}-key.pem"
-        ca_file = f"{CA_DIR}/ca-cert.pem"
+    def export_certificate_bundle(self, output_dir: str, client_name: str = None) -> str:
+        """Export certificate bundle for distribution"""
+        output_path = Path(output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
         
-        if not all(os.path.exists(f) for f in [cert_file, key_file]):
-            raise FileNotFoundError(f"Certificate or key not found for {cert_name}")
+        ca_cert_path = f"{CA_DIR}/ca-cert.pem"
         
-        output_file = f"{CERT_DIR}/{cert_name}.{output_format}"
-        
-        if output_format.lower() == 'p12':
-            args = ['pkcs12', '-export', '-in', cert_file, '-inkey', key_file]
-            if os.path.exists(ca_file):
-                args.extend(['-certfile', ca_file])
-            args.extend(['-out', output_file])
+        if client_name:
+            # Export specific client bundle
+            cert_path = f"{CERT_DIR}/{client_name}-cert.pem"
+            key_path = f"{PRIVATE_DIR}/{client_name}-key.pem"
             
-            if password:
-                args.extend(['-passout', f'pass:{password}'])
-            else:
-                args.append('-nodes')
+            if not os.path.exists(cert_path):
+                raise OpenSSLError(f"Client certificate not found: {cert_path}")
             
-            self.run_openssl_command(args)
-            logger.info(f"PKCS#12 bundle exported: {output_file}")
+            bundle_dir = output_path / client_name
+            bundle_dir.mkdir(exist_ok=True)
             
-        elif output_format.lower() == 'pem':
-            # Combine cert, key, and CA into single PEM file
-            with open(output_file, 'w') as outf:
-                with open(cert_file, 'r') as inf:
-                    outf.write(inf.read())
-                with open(key_file, 'r') as inf:
-                    outf.write(inf.read())
-                if os.path.exists(ca_file):
-                    with open(ca_file, 'r') as inf:
-                        outf.write(inf.read())
+            # Copy files
+            shutil.copy2(ca_cert_path, bundle_dir / "ca-cert.pem")
+            shutil.copy2(cert_path, bundle_dir / f"{client_name}-cert.pem")
+            shutil.copy2(key_path, bundle_dir / f"{client_name}-key.pem")
             
-            logger.info(f"PEM bundle exported: {output_file}")
-        
+            # Create PKCS#12
+            p12_path = self.create_pkcs12(cert_path, key_path, ca_cert_path)
+            shutil.copy2(p12_path, bundle_dir / f"{client_name}.p12")
+            
+            # Create connection script
+            self._create_connection_script(bundle_dir, client_name)
+            
+            logger.info(f"Client bundle exported: {bundle_dir}")
+            return str(bundle_dir)
         else:
-            raise ValueError(f"Unsupported output format: {output_format}")
+            # Export CA bundle
+            shutil.copy2(ca_cert_path, output_path / "ca-cert.pem")
+            logger.info(f"CA bundle exported: {output_path}")
+            return str(output_path)
+    
+    def _create_connection_script(self, bundle_dir: Path, client_name: str) -> None:
+        """Create connection script for client"""
+        script_content = f"""#!/bin/bash
+# PQC-VPN Connection Script for {client_name}
+# Generated by PQC-VPN Certificate Manager
+
+BUNDLE_DIR="$(dirname "$0")"
+IPSEC_CONF="/etc/ipsec.conf"
+IPSEC_SECRETS="/etc/ipsec.secrets"
+
+# Check if running as root
+if [[ $EUID -ne 0 ]]; then
+    echo "This script must be run as root"
+    exit 1
+fi
+
+echo "Setting up PQC-VPN connection for {client_name}..."
+
+# Install certificates
+cp "$BUNDLE_DIR/ca-cert.pem" /etc/ipsec.d/cacerts/
+cp "$BUNDLE_DIR/{client_name}-cert.pem" /etc/ipsec.d/certs/
+cp "$BUNDLE_DIR/{client_name}-key.pem" /etc/ipsec.d/private/
+
+# Set permissions
+chmod 644 /etc/ipsec.d/cacerts/ca-cert.pem
+chmod 644 /etc/ipsec.d/certs/{client_name}-cert.pem
+chmod 600 /etc/ipsec.d/private/{client_name}-key.pem
+
+# Add connection configuration
+cat >> "$IPSEC_CONF" << 'EOF'
+
+# PQC-VPN Client Connection for {client_name}
+conn pqc-vpn-{client_name}
+    keyexchange=ikev2
+    left=%defaultroute
+    leftcert={client_name}-cert.pem
+    leftauth=pubkey
+    leftfirewall=yes
+    
+    right=%any
+    rightauth=pubkey
+    rightca="C=US, ST=CA, L=San Francisco, O=PQC-VPN Enterprise, OU=Certificate Authority, CN=PQC-VPN Root CA"
+    
+    ike=aes256gcm16-sha384-ecp384,aes256-sha384-ecp384!
+    esp=aes256gcm16-sha384,aes256-sha384!
+    
+    auto=start
+    closeaction=restart
+    dpdaction=restart
+    dpddelay=30s
+    dpdtimeout=120s
+EOF
+
+# Add secrets
+echo ": RSA {client_name}-key.pem" >> "$IPSEC_SECRETS"
+
+echo "Connection configured. Starting strongSwan..."
+systemctl restart strongswan
+
+echo "PQC-VPN connection setup complete for {client_name}"
+echo "Check status with: ipsec status"
+"""
         
-        return output_file
+        script_path = bundle_dir / f"connect-{client_name}.sh"
+        with open(script_path, 'w') as f:
+            f.write(script_content)
+        
+        os.chmod(script_path, 0o755)
 
 
 def main():
     """Main CLI interface"""
     parser = argparse.ArgumentParser(
-        description='PQC-VPN Certificate Generator with OpenSSL 3.5 Support',
+        description="PQC-VPN Certificate Manager with OpenSSL 3.5 Support",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
   # Generate CA certificate
   %(prog)s ca --key-type rsa --key-size 4096
-
+  
   # Generate server certificate
-  %(prog)s server hub.example.com --ip 192.168.1.100 --dns hub.local
-
+  %(prog)s server hub.pqc-vpn.local --san localhost,10.10.0.1
+  
   # Generate client certificate
-  %(prog)s client alice --email alice@example.com
-
+  %(prog)s client alice --email alice@company.com
+  
   # List all certificates
   %(prog)s list
-
-  # Export certificate bundle
-  %(prog)s export alice --format p12 --password secret123
+  
+  # Export client bundle
+  %(prog)s export alice /tmp/vpn-clients/
         """
     )
+    
+    parser.add_argument('--debug', action='store_true', help='Enable debug logging')
+    parser.add_argument('--openssl-bin', default=OPENSSL_BIN, help='OpenSSL binary path')
+    parser.add_argument('--openssl-conf', default=OPENSSL_CONF, help='OpenSSL config path')
     
     subparsers = parser.add_subparsers(dest='command', help='Available commands')
     
     # CA command
-    ca_parser = subparsers.add_parser('ca', help='Generate CA certificate')
-    ca_parser.add_argument('--key-type', choices=['rsa', 'ecdsa', 'ed25519'], 
-                          default='rsa', help='Key type (default: rsa)')
-    ca_parser.add_argument('--key-size', type=int, default=4096,
-                          help='Key size in bits (default: 4096)')
-    ca_parser.add_argument('--days', type=int, default=3650,
-                          help='Certificate validity in days (default: 3650)')
-    ca_parser.add_argument('--subject', help='Certificate subject')
+    ca_parser = subparsers.add_parser('ca', help='Generate Certificate Authority')
+    ca_parser.add_argument('--subject', help='CA subject DN')
+    ca_parser.add_argument('--key-type', choices=['rsa', 'ec'], default='rsa', help='Key type')
+    ca_parser.add_argument('--key-size', default='4096', help='Key size or curve name')
+    ca_parser.add_argument('--validity-days', type=int, default=3650, help='Validity period')
+    ca_parser.add_argument('--force', action='store_true', help='Overwrite existing CA')
     
     # Server command
     server_parser = subparsers.add_parser('server', help='Generate server certificate')
     server_parser.add_argument('hostname', help='Server hostname')
-    server_parser.add_argument('--ip', action='append', dest='ip_addresses',
-                              help='IP addresses (can be used multiple times)')
-    server_parser.add_argument('--dns', action='append', dest='dns_names',
-                              help='DNS names (can be used multiple times)')
-    server_parser.add_argument('--key-type', choices=['rsa', 'ecdsa', 'ed25519'],
-                              default='rsa', help='Key type (default: rsa)')
-    server_parser.add_argument('--key-size', type=int, default=4096,
-                              help='Key size in bits (default: 4096)')
-    server_parser.add_argument('--days', type=int, default=365,
-                              help='Certificate validity in days (default: 365)')
+    server_parser.add_argument('--subject', help='Certificate subject DN')
+    server_parser.add_argument('--san', help='Comma-separated list of SANs')
+    server_parser.add_argument('--key-type', choices=['rsa', 'ec'], default='rsa', help='Key type')
+    server_parser.add_argument('--key-size', default='4096', help='Key size or curve name')
+    server_parser.add_argument('--validity-days', type=int, default=365, help='Validity period')
     
     # Client command
     client_parser = subparsers.add_parser('client', help='Generate client certificate')
-    client_parser.add_argument('username', help='Username')
-    client_parser.add_argument('--email', help='Email address')
-    client_parser.add_argument('--key-type', choices=['rsa', 'ecdsa', 'ed25519'],
-                              default='rsa', help='Key type (default: rsa)')
-    client_parser.add_argument('--key-size', type=int, default=2048,
-                              help='Key size in bits (default: 2048)')
-    client_parser.add_argument('--days', type=int, default=365,
-                              help='Certificate validity in days (default: 365)')
+    client_parser.add_argument('client_name', help='Client name')
+    client_parser.add_argument('--email', help='Client email address')
+    client_parser.add_argument('--subject', help='Certificate subject DN')
+    client_parser.add_argument('--key-type', choices=['rsa', 'ec'], default='rsa', help='Key type')
+    client_parser.add_argument('--key-size', default='4096', help='Key size or curve name')
+    client_parser.add_argument('--validity-days', type=int, default=365, help='Validity period')
     
     # List command
     list_parser = subparsers.add_parser('list', help='List certificates')
-    list_parser.add_argument('--format', choices=['table', 'json', 'yaml'],
-                            default='table', help='Output format (default: table)')
+    list_parser.add_argument('--format', choices=['table', 'json', 'yaml'], default='table', help='Output format')
     
     # Export command
     export_parser = subparsers.add_parser('export', help='Export certificate bundle')
-    export_parser.add_argument('cert_name', help='Certificate name')
-    export_parser.add_argument('--format', choices=['p12', 'pem'], default='p12',
-                               help='Export format (default: p12)')
-    export_parser.add_argument('--password', help='Password for PKCS#12 export')
-    
-    # Info command
-    info_parser = subparsers.add_parser('info', help='Show certificate information')
-    info_parser.add_argument('cert_file', help='Certificate file path')
+    export_parser.add_argument('client_name', nargs='?', help='Client name (optional for CA bundle)')
+    export_parser.add_argument('output_dir', help='Output directory')
     
     # Verify command
     verify_parser = subparsers.add_parser('verify', help='Verify certificate')
-    verify_parser.add_argument('cert_file', help='Certificate file path')
-    verify_parser.add_argument('--ca', help='CA certificate file')
+    verify_parser.add_argument('cert_path', help='Certificate file path')
+    verify_parser.add_argument('--ca-cert', help='CA certificate path')
     
-    # Version command
-    version_parser = subparsers.add_parser('version', help='Show version information')
+    # Revoke command
+    revoke_parser = subparsers.add_parser('revoke', help='Revoke certificate')
+    revoke_parser.add_argument('cert_path', help='Certificate file path')
+    revoke_parser.add_argument('--reason', default='unspecified', help='Revocation reason')
     
     args = parser.parse_args()
     
+    if args.debug:
+        logging.getLogger().setLevel(logging.DEBUG)
+    
     if not args.command:
         parser.print_help()
-        return
+        return 1
     
     try:
-        cert_manager = OpenSSL35CertificateManager()
+        cert_manager = PQCCertificateManager(args.openssl_bin, args.openssl_conf)
         
         if args.command == 'ca':
-            cert_file, key_file = cert_manager.generate_ca_certificate(
-                args.key_type, args.key_size, args.subject, args.days
+            key_size = int(args.key_size) if args.key_size.isdigit() else args.key_size
+            cert_manager.generate_ca_certificate(
+                subject=args.subject,
+                key_type=args.key_type,
+                key_size=key_size,
+                validity_days=args.validity_days,
+                force=args.force
             )
-            print(f"CA certificate generated:")
-            print(f"  Certificate: {cert_file}")
-            print(f"  Private key: {key_file}")
-        
+            
         elif args.command == 'server':
-            cert_file, key_file = cert_manager.generate_server_certificate(
-                args.hostname, args.ip_addresses, args.dns_names,
-                args.key_type, args.key_size, args.days
+            san_list = args.san.split(',') if args.san else None
+            key_size = int(args.key_size) if args.key_size.isdigit() else args.key_size
+            cert_manager.generate_server_certificate(
+                hostname=args.hostname,
+                subject=args.subject,
+                san_list=san_list,
+                key_type=args.key_type,
+                key_size=key_size,
+                validity_days=args.validity_days
             )
-            print(f"Server certificate generated:")
-            print(f"  Certificate: {cert_file}")
-            print(f"  Private key: {key_file}")
-        
+            
         elif args.command == 'client':
-            cert_file, key_file = cert_manager.generate_client_certificate(
-                args.username, args.email, args.key_type, args.key_size, args.days
+            key_size = int(args.key_size) if args.key_size.isdigit() else args.key_size
+            cert_manager.generate_client_certificate(
+                client_name=args.client_name,
+                email=args.email,
+                subject=args.subject,
+                key_type=args.key_type,
+                key_size=key_size,
+                validity_days=args.validity_days
             )
-            print(f"Client certificate generated:")
-            print(f"  Certificate: {cert_file}")
-            print(f"  Private key: {key_file}")
-        
+            
         elif args.command == 'list':
             certificates = cert_manager.list_certificates()
             
             if args.format == 'json':
-                print(json.dumps(certificates, indent=2, default=str))
+                print(json.dumps(certificates, indent=2))
             elif args.format == 'yaml':
                 print(yaml.dump(certificates, default_flow_style=False))
             else:
                 # Table format
-                print(f"{'Type':<8} {'Subject':<50} {'Expires':<20} {'File':<30}")
-                print("-" * 120)
+                from tabulate import tabulate
+                table_data = []
                 for cert in certificates:
-                    cert_type = cert.get('type', 'Cert')
-                    subject = cert.get('subject', 'Unknown')[:48]
-                    expires = cert.get('dates', {}).get('notAfter', 'Unknown')[:18]
-                    filename = os.path.basename(cert.get('file', ''))[:28]
-                    print(f"{cert_type:<8} {subject:<50} {expires:<20} {filename:<30}")
-        
+                    table_data.append([
+                        cert['name'],
+                        cert['subject'].split('CN=')[1].split(',')[0] if 'CN=' in cert['subject'] else 'N/A',
+                        cert['not_after']
+                    ])
+                
+                print(tabulate(table_data, headers=['Name', 'Common Name', 'Expires'], tablefmt='grid'))
+            
         elif args.command == 'export':
-            output_file = cert_manager.export_certificate_bundle(
-                args.cert_name, args.format, args.password
-            )
-            print(f"Certificate bundle exported: {output_file}")
-        
-        elif args.command == 'info':
-            cert_info = cert_manager.get_certificate_info(args.cert_file)
-            if cert_info:
-                print(f"Certificate Information:")
-                print(f"  Subject: {cert_info.get('subject')}")
-                print(f"  Issuer: {cert_info.get('issuer')}")
-                print(f"  Serial: {cert_info.get('serial')}")
-                print(f"  Valid from: {cert_info.get('dates', {}).get('notBefore')}")
-                print(f"  Valid until: {cert_info.get('dates', {}).get('notAfter')}")
-                print(f"  Fingerprint: {cert_info.get('fingerprint')}")
-            else:
-                print("Failed to get certificate information")
-        
+            bundle_path = cert_manager.export_certificate_bundle(args.output_dir, args.client_name)
+            print(f"Bundle exported to: {bundle_path}")
+            
         elif args.command == 'verify':
-            ca_file = args.ca or f"{CA_DIR}/ca-cert.pem"
-            is_valid = cert_manager.verify_certificate(args.cert_file, ca_file)
-            print(f"Certificate verification: {'PASSED' if is_valid else 'FAILED'}")
+            is_valid = cert_manager.verify_certificate(args.cert_path, args.ca_cert)
+            if is_valid:
+                print("Certificate is valid")
+                return 0
+            else:
+                print("Certificate is invalid")
+                return 1
+                
+        elif args.command == 'revoke':
+            cert_manager.revoke_certificate(args.cert_path, args.reason)
+            print(f"Certificate revoked: {args.cert_path}")
         
-        elif args.command == 'version':
-            # Get OpenSSL version
-            stdout, _ = cert_manager.run_openssl_command(['version', '-a'])
-            print("PQC-VPN Certificate Generator v3.0.0")
-            print("OpenSSL 3.5 Native Implementation")
-            print("\nOpenSSL Information:")
-            print(stdout)
-    
+        return 0
+        
+    except OpenSSLError as e:
+        logger.error(f"OpenSSL error: {e}")
+        return 1
     except Exception as e:
-        logger.error(f"Command failed: {e}")
-        sys.exit(1)
+        logger.error(f"Unexpected error: {e}")
+        if args.debug:
+            import traceback
+            traceback.print_exc()
+        return 1
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())
