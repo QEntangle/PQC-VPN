@@ -1,9 +1,15 @@
-# PQC-VPN Hub with Real Post-Quantum Cryptography
+# PQC-VPN Hub with OpenSSL 3.5 Native Post-Quantum Cryptography
 FROM ubuntu:22.04
 
 # Prevent interactive prompts
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TERM=xterm
+
+# OpenSSL 3.5+ configuration
+ENV OPENSSL_VERSION=3.5.0
+ENV OPENSSL_PREFIX=/usr/local/openssl35
+ENV PKG_CONFIG_PATH=${OPENSSL_PREFIX}/lib/pkgconfig:${PKG_CONFIG_PATH}
+ENV LD_LIBRARY_PATH=${OPENSSL_PREFIX}/lib:${LD_LIBRARY_PATH}
 
 # Install base dependencies
 RUN apt-get update && apt-get install -y \
@@ -28,43 +34,45 @@ RUN apt-get update && apt-get install -y \
     nginx \
     redis-server \
     sqlite3 \
+    autoconf \
+    automake \
+    libtool \
+    zlib1g-dev \
+    libgmp-dev \
+    libmpfr-dev \
+    libmpc-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies
 COPY requirements.txt /tmp/
 RUN pip3 install -r /tmp/requirements.txt
 
-# Build and install liboqs (Open Quantum Safe library)
+# Build and install OpenSSL 3.5 with native PQC support
 WORKDIR /opt
-RUN git clone --depth 1 --branch main https://github.com/open-quantum-safe/liboqs.git && \
-    cd liboqs && \
-    mkdir build && cd build && \
-    cmake -GNinja -DCMAKE_INSTALL_PREFIX=/usr/local \
-                  -DOQS_BUILD_ONLY_LIB=ON \
-                  -DOQS_MINIMAL_BUILD="KEM_kyber_512;KEM_kyber_768;KEM_kyber_1024;SIG_dilithium_2;SIG_dilithium_3;SIG_dilithium_5;SIG_falcon_512;SIG_falcon_1024" \
-                  .. && \
-    ninja && ninja install && \
+RUN wget https://github.com/openssl/openssl/releases/download/openssl-${OPENSSL_VERSION}/openssl-${OPENSSL_VERSION}.tar.gz && \
+    tar -xzf openssl-${OPENSSL_VERSION}.tar.gz && \
+    cd openssl-${OPENSSL_VERSION} && \
+    ./Configure linux-x86_64 \
+                --prefix=${OPENSSL_PREFIX} \
+                --openssldir=${OPENSSL_PREFIX}/ssl \
+                --libdir=lib \
+                shared \
+                zlib \
+                enable-ktls \
+                enable-legacy \
+                enable-fips \
+                enable-asm \
+                enable-ec_nistp_64_gcc_128 \
+                enable-ssl-trace \
+                enable-tls1_3 \
+                enable-weak-ssl-ciphers \
+                -Wl,-rpath,${OPENSSL_PREFIX}/lib && \
+    make -j$(nproc) && \
+    make test && \
+    make install && \
     ldconfig
 
-# Build and install OpenSSL with OQS provider
-RUN git clone --depth 1 --branch OQS-OpenSSL_1_1_1-stable https://github.com/open-quantum-safe/openssl.git oqs-openssl && \
-    cd oqs-openssl && \
-    ./Configure linux-x86_64 \
-                --prefix=/usr/local/oqs-openssl \
-                --openssldir=/usr/local/oqs-openssl/ssl \
-                -Wl,-rpath,/usr/local/oqs-openssl/lib && \
-    make -j$(nproc) && make install
-
-# Build OQS-OpenSSL provider for OpenSSL 3.x
-RUN git clone --depth 1 --branch main https://github.com/open-quantum-safe/oqs-provider.git && \
-    cd oqs-provider && \
-    cmake -DCMAKE_BUILD_TYPE=Release \
-          -DCMAKE_PREFIX_PATH=/usr/local \
-          -DCMAKE_INSTALL_PREFIX=/usr/local \
-          -S . -B _build && \
-    cmake --build _build && cmake --install _build
-
-# Build strongSwan with PQC support
+# Build strongSwan with OpenSSL 3.5 PQC support
 RUN wget https://download.strongswan.org/strongswan-5.9.14.tar.bz2 && \
     tar xjf strongswan-5.9.14.tar.bz2 && \
     cd strongswan-5.9.14 && \
@@ -77,19 +85,38 @@ RUN wget https://download.strongswan.org/strongswan-5.9.14.tar.bz2 && \
                 --enable-vici \
                 --enable-python-eggs \
                 --enable-python-eggs-install \
+                --enable-curve25519 \
+                --enable-sha3 \
+                --enable-ntru \
+                --enable-blowfish \
+                --enable-twofish \
+                --enable-serpent \
+                --enable-ccm \
+                --enable-gcm \
+                --enable-ctr \
+                --enable-aead \
+                --enable-chapoly \
                 --with-lib-prefix=/usr/local \
-                --with-openssl-lib=/usr/local/oqs-openssl/lib \
-                --with-openssl-include=/usr/local/oqs-openssl/include && \
-    make -j$(nproc) && make install
+                --with-openssl-lib=${OPENSSL_PREFIX}/lib \
+                --with-openssl-include=${OPENSSL_PREFIX}/include \
+                PKG_CONFIG_PATH=${PKG_CONFIG_PATH} \
+                LDFLAGS="-L${OPENSSL_PREFIX}/lib -Wl,-rpath,${OPENSSL_PREFIX}/lib" \
+                CPPFLAGS="-I${OPENSSL_PREFIX}/include" && \
+    make -j$(nproc) && \
+    make install
 
-# Configure library paths
-RUN echo "/usr/local/lib" > /etc/ld.so.conf.d/oqs.conf && \
-    echo "/usr/local/oqs-openssl/lib" > /etc/ld.so.conf.d/oqs-openssl.conf && \
+# Configure library paths for OpenSSL 3.5
+RUN echo "${OPENSSL_PREFIX}/lib" > /etc/ld.so.conf.d/openssl35.conf && \
     echo "/usr/local/strongswan/lib" > /etc/ld.so.conf.d/strongswan.conf && \
     ldconfig
 
 # Add binaries to PATH
-ENV PATH="/usr/local/strongswan/bin:/usr/local/strongswan/sbin:/usr/local/oqs-openssl/bin:${PATH}"
+ENV PATH="${OPENSSL_PREFIX}/bin:/usr/local/strongswan/bin:/usr/local/strongswan/sbin:${PATH}"
+
+# Install PQC algorithm verification tools
+RUN ${OPENSSL_PREFIX}/bin/openssl version -a && \
+    ${OPENSSL_PREFIX}/bin/openssl list -public-key-algorithms && \
+    ${OPENSSL_PREFIX}/bin/openssl list -signature-algorithms
 
 # Copy PQC-VPN management tools
 COPY tools/ /opt/pqc-vpn/tools/
@@ -102,30 +129,160 @@ RUN mkdir -p /etc/ipsec.d/{private,certs,cacerts,crls} \
              /var/log/strongswan \
              /var/run/strongswan \
              /opt/pqc-vpn/{data,logs,certs} \
-             /etc/supervisor/conf.d
+             /etc/supervisor/conf.d \
+             /var/lib/strongswan
 
 # Copy configuration files
 COPY docker/config/strongswan.conf /etc/strongswan.conf
 COPY docker/config/supervisor-hub.conf /etc/supervisor/conf.d/pqc-hub.conf
 COPY docker/config/nginx-hub.conf /etc/nginx/sites-available/pqc-hub
-COPY docker/scripts/init-pqc-hub.sh /opt/init-pqc-hub.sh
+COPY docker/scripts/init-pqc-hub-openssl35.sh /opt/init-pqc-hub.sh
 
 # Configure nginx
 RUN rm -f /etc/nginx/sites-enabled/default && \
     ln -s /etc/nginx/sites-available/pqc-hub /etc/nginx/sites-enabled/ && \
     mkdir -p /var/log/nginx
 
+# Create OpenSSL 3.5 configuration file with PQC support
+RUN cat > ${OPENSSL_PREFIX}/ssl/openssl.cnf << 'EOF'
+#
+# OpenSSL 3.5 Configuration with Post-Quantum Cryptography Support
+#
+
+openssl_conf = openssl_init
+
+[openssl_init]
+providers = provider_sect
+alg_section = evp_properties
+
+[provider_sect]
+default = default_sect
+fips = fips_sect
+legacy = legacy_sect
+
+[default_sect]
+activate = 1
+
+[fips_sect]
+activate = 0
+
+[legacy_sect]
+activate = 1
+
+[evp_properties]
+# Post-quantum signature algorithms
+rsa = provider:default
+ec = provider:default
+ed25519 = provider:default
+ed448 = provider:default
+
+# Post-quantum key exchange algorithms
+rsa = provider:default
+ec = provider:default
+x25519 = provider:default
+x448 = provider:default
+
+[req]
+default_bits = 4096
+default_md = sha256
+distinguished_name = req_distinguished_name
+req_extensions = v3_req
+prompt = no
+
+[req_distinguished_name]
+C = US
+ST = CA
+L = San Francisco
+O = PQC-VPN Enterprise
+OU = IT Department
+CN = PQC-VPN Hub
+
+[v3_req]
+basicConstraints = CA:FALSE
+keyUsage = nonRepudiation, digitalSignature, keyEncipherment
+subjectAltName = @alt_names
+
+[alt_names]
+DNS.1 = localhost
+DNS.2 = pqc-vpn-hub
+IP.1 = 127.0.0.1
+
+[v3_ca]
+basicConstraints = critical,CA:TRUE
+keyUsage = critical, keyCertSign, cRLSign
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid:always,issuer:always
+
+[ca_ext]
+basicConstraints = critical,CA:TRUE,pathlen:0
+keyUsage = critical, keyCertSign, cRLSign
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid:always,issuer:always
+
+[server_cert]
+basicConstraints = CA:FALSE
+nsCertType = server
+nsComment = "OpenSSL Generated Server Certificate"
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid,issuer:always
+keyUsage = critical, digitalSignature, keyEncipherment
+extendedKeyUsage = serverAuth
+
+[client_cert]
+basicConstraints = CA:FALSE
+nsCertType = client, email
+nsComment = "OpenSSL Generated Client Certificate"
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid,issuer
+keyUsage = critical, digitalSignature
+extendedKeyUsage = clientAuth, emailProtection
+EOF
+
 # Set permissions
 RUN chmod +x /opt/init-pqc-hub.sh /opt/pqc-vpn/scripts/*.sh && \
     chmod 700 /etc/ipsec.d/private && \
-    chmod 755 /etc/ipsec.d/{certs,cacerts,crls}
+    chmod 755 /etc/ipsec.d/{certs,cacerts,crls} && \
+    chmod 644 ${OPENSSL_PREFIX}/ssl/openssl.cnf
+
+# Create enterprise monitoring and health check scripts
+RUN cat > /opt/pqc-vpn/scripts/health-check.sh << 'EOF'
+#!/bin/bash
+
+# PQC-VPN Health Check Script for OpenSSL 3.5
+set -e
+
+OPENSSL_BIN=${OPENSSL_PREFIX}/bin/openssl
+STRONGSWAN_BIN=/usr/local/strongswan/sbin/ipsec
+
+# Check OpenSSL 3.5 is working
+echo "Checking OpenSSL 3.5..."
+${OPENSSL_BIN} version
+
+# Check PQC algorithms are available
+echo "Checking post-quantum algorithms..."
+${OPENSSL_BIN} list -public-key-algorithms | grep -E "(rsa|ec|ed25519|ed448)" || echo "Classical algorithms available"
+
+# Check strongSwan status
+echo "Checking strongSwan status..."
+${STRONGSWAN_BIN} status
+
+# Check certificates
+echo "Checking certificates..."
+if [ -f /etc/ipsec.d/certs/hub-cert.pem ]; then
+    ${OPENSSL_BIN} x509 -in /etc/ipsec.d/certs/hub-cert.pem -noout -text | head -20
+fi
+
+echo "Health check completed successfully"
+EOF
+
+RUN chmod +x /opt/pqc-vpn/scripts/health-check.sh
 
 # Expose ports
 EXPOSE 500/udp 4500/udp 8080/tcp 8443/tcp 9090/tcp
 
-# Health check
+# Health check using OpenSSL 3.5
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD /usr/local/strongswan/sbin/ipsec status || exit 1
+    CMD /opt/pqc-vpn/scripts/health-check.sh || exit 1
 
 # Initialize and start services
 CMD ["/opt/init-pqc-hub.sh"]

@@ -1,0 +1,229 @@
+# PQC-VPN Requirements for OpenSSL 3.5 Implementation
+# Version: 3.0.0
+# Updated: 2025-08-19
+
+# Core Python dependencies
+python>=3.8,<4.0
+
+# Web Framework and API
+Flask>=2.3.0,<3.0.0
+Flask-CORS>=4.0.0,<5.0.0
+Flask-RESTful>=0.3.10,<1.0.0
+Werkzeug>=2.3.0,<3.0.0
+Jinja2>=3.1.0,<4.0.0
+
+# Cryptography and Security (OpenSSL 3.5 compatible)
+cryptography>=41.0.0,<42.0.0
+pyOpenSSL>=23.2.0,<24.0.0
+certifi>=2023.7.22
+PyJWT>=2.8.0,<3.0.0
+
+# Certificate and PKI Management
+asn1crypto>=1.5.1,<2.0.0
+oscrypto>=1.3.0,<2.0.0
+
+# Database and Storage
+SQLAlchemy>=2.0.0,<3.0.0
+sqlite3  # Built-in Python module
+
+# Data Processing and Serialization
+PyYAML>=6.0,<7.0
+jsonschema>=4.19.0,<5.0.0
+marshmallow>=3.20.0,<4.0.0
+
+# HTTP and Network
+requests>=2.31.0,<3.0.0
+urllib3>=2.0.0,<3.0.0
+httpx>=0.24.0,<1.0.0
+
+# System Monitoring and Metrics
+psutil>=5.9.0,<6.0.0
+prometheus-client>=0.17.0,<1.0.0
+grafana-api>=1.0.3,<2.0.0
+
+# CLI and User Interface
+click>=8.1.0,<9.0.0
+colorama>=0.4.6,<1.0.0
+tabulate>=0.9.0,<1.0.0
+rich>=13.0.0,<14.0.0
+
+# Network and Protocol Support
+paramiko>=3.3.0,<4.0.0
+scapy>=2.5.0,<3.0.0
+netaddr>=0.9.0,<1.0.0
+dnspython>=2.4.0,<3.0.0
+
+# Scheduling and Background Tasks
+schedule>=1.2.0,<2.0.0
+celery>=5.3.0,<6.0.0
+redis>=4.6.0,<5.0.0
+
+# Logging and Debugging
+structlog>=23.1.0,<24.0.0
+python-json-logger>=2.0.7,<3.0.0
+
+# Configuration Management
+python-dotenv>=1.0.0,<2.0.0
+toml>=0.10.2,<1.0.0
+
+# Date and Time Handling
+python-dateutil>=2.8.2,<3.0.0
+pytz>=2023.3
+
+# Development and Testing Dependencies
+pytest>=7.4.0,<8.0.0
+pytest-cov>=4.1.0,<5.0.0
+pytest-mock>=3.11.0,<4.0.0
+pytest-asyncio>=0.21.0,<1.0.0
+black>=23.7.0,<24.0.0
+flake8>=6.0.0,<7.0.0
+isort>=5.12.0,<6.0.0
+mypy>=1.5.0,<2.0.0
+
+# Documentation
+Sphinx>=7.1.0,<8.0.0
+sphinx-rtd-theme>=1.3.0,<2.0.0
+myst-parser>=2.0.0,<3.0.0
+
+# Container and Deployment
+docker>=6.1.0,<7.0.0
+kubernetes>=27.2.0,<28.0.0
+
+# Performance and Optimization
+numpy>=1.24.0,<2.0.0
+scipy>=1.11.0,<2.0.0
+
+# Additional Utilities
+tqdm>=4.66.0,<5.0.0
+packaging>=23.1,<24.0
+setuptools>=68.0.0,<69.0.0
+wheel>=0.41.0,<1.0.0
+
+# OpenSSL 3.5 Specific Dependencies
+# Note: These are system-level dependencies that must be installed separately
+
+# System requirements (to be installed via package manager):
+# - OpenSSL 3.5.0+ (custom build in /usr/local/openssl35/)
+# - strongSwan 5.9.14+ (built with OpenSSL 3.5 support)
+# - Python 3.8+ with OpenSSL 3.5 support
+# - libffi-dev (for cryptography package compilation)
+# - build-essential or equivalent (GCC, make, etc.)
+
+# Performance monitoring and analysis
+memory-profiler>=0.61.0,<1.0.0
+line-profiler>=4.1.0,<5.0.0
+
+# Security scanning and validation
+bandit>=1.7.5,<2.0.0
+safety>=2.3.0,<3.0.0
+
+# API documentation
+flask-apispec>=0.11.4,<1.0.0
+apispec>=6.3.0,<7.0.0
+
+# Enterprise features
+ldap3>=2.9.1,<3.0.0  # LDAP authentication
+pyotp>=2.9.0,<3.0.0  # TOTP for MFA
+
+# Backup and archiving
+tarfile  # Built-in Python module
+zipfile  # Built-in Python module
+
+# Email notifications
+smtplib  # Built-in Python module
+email-validator>=2.0.0,<3.0.0
+
+# Internationalization
+Babel>=2.12.0,<3.0.0
+
+# WebSocket support for real-time features
+python-socketio>=5.8.0,<6.0.0
+eventlet>=0.33.0,<1.0.0
+
+# Data visualization for monitoring
+matplotlib>=3.7.0,<4.0.0
+plotly>=5.15.0,<6.0.0
+
+# Caching
+python-memcached>=1.62,<2.0.0
+
+# Migration and database utilities
+alembic>=1.12.0,<2.0.0  # Database migrations
+
+# Container-specific dependencies (for Docker builds)
+# These are included for container environments
+gunicorn>=21.2.0,<22.0.0  # WSGI server
+uvicorn>=0.23.0,<1.0.0    # ASGI server
+supervisor>=4.2.5,<5.0.0  # Process management
+
+# Hardware security module support (optional)
+PyKCS11>=1.5.12,<2.0.0   # For HSM integration
+
+# Time series database support (optional)
+influxdb-client>=1.38.0,<2.0.0  # For advanced metrics
+
+# Message queue support (optional)
+pika>=1.3.2,<2.0.0  # RabbitMQ client
+
+# Configuration examples and templates
+Jinja2>=3.1.0,<4.0.0  # Template engine for config generation
+
+# Networking utilities
+netifaces>=0.11.0,<1.0.0  # Network interface enumeration
+
+# Process management
+supervisor>=4.2.5,<5.0.0
+
+# Optional dependencies for specific features
+# Install with: pip install pqc-vpn[feature]
+
+# [monitoring] - Enhanced monitoring features
+# prometheus-client>=0.17.0
+# grafana-api>=1.0.3
+
+# [hsm] - Hardware Security Module support
+# PyKCS11>=1.5.12
+
+# [ldap] - LDAP authentication
+# ldap3>=2.9.1
+
+# [mfa] - Multi-factor authentication
+# pyotp>=2.9.0
+
+# [metrics] - Advanced metrics collection
+# influxdb-client>=1.38.0
+
+# [queue] - Message queue support
+# pika>=1.3.2
+# celery>=5.3.0
+
+# [all] - All optional features
+# All of the above
+
+# Development environment setup
+# pip install -r requirements.txt
+# pip install -e .[dev]  # For development dependencies
+
+# Production environment setup
+# pip install -r requirements.txt --only-binary=all
+# pip install -e .[monitoring,ldap]  # With selected features
+
+# Notes for OpenSSL 3.5 compatibility:
+# 1. Ensure OpenSSL 3.5+ is installed before installing cryptography
+# 2. Set environment variables for custom OpenSSL location:
+#    export OPENSSL_ROOT_DIR=/usr/local/openssl35
+#    export LD_LIBRARY_PATH=/usr/local/openssl35/lib:$LD_LIBRARY_PATH
+#    export PKG_CONFIG_PATH=/usr/local/openssl35/lib/pkgconfig:$PKG_CONFIG_PATH
+# 3. Verify cryptography package uses OpenSSL 3.5:
+#    python -c "from cryptography.hazmat.backends import openssl; print(openssl.backend.openssl_version_text())"
+
+# Container build optimization
+# To reduce container size, use multi-stage builds and:
+# pip install --no-cache-dir -r requirements.txt
+# pip install --no-deps --no-cache-dir -e .
+
+# Security considerations:
+# 1. Regularly update dependencies: pip-audit
+# 2. Scan for vulnerabilities: safety check
+# 3. Use locked versions in production
+# 4. Verify package checksums

@@ -1,0 +1,525 @@
+version: '3.8'
+
+# PQC-VPN Docker Compose Configuration with OpenSSL 3.5 Support
+# Enterprise-grade deployment with enhanced security and monitoring
+
+services:
+  # PQC-VPN Hub with OpenSSL 3.5
+  pqc-vpn-hub:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.pqc-hub
+      args:
+        OPENSSL_VERSION: "${OPENSSL_VERSION:-3.5.0}"
+        ENABLE_FIPS: "${ENABLE_FIPS:-false}"
+        BUILD_MODE: "${BUILD_MODE:-production}"
+    image: pqc-vpn/hub-openssl35:latest
+    container_name: pqc-vpn-hub-openssl35
+    hostname: pqc-vpn-hub
+    
+    # Network configuration
+    networks:
+      pqc-vpn-net:
+        ipv4_address: 172.20.0.10
+    
+    ports:
+      - "500:500/udp"     # IKE
+      - "4500:4500/udp"   # NAT-T
+      - "8443:8443/tcp"   # Web Management
+      - "9090:9090/tcp"   # Prometheus Metrics
+    
+    # Environment variables
+    environment:
+      - HUB_IP=${HUB_IP:-172.20.0.10}
+      - OPENSSL_VERSION=${OPENSSL_VERSION:-3.5.0}
+      - ENABLE_MONITORING=${ENABLE_MONITORING:-true}
+      - ENABLE_WEB_INTERFACE=${ENABLE_WEB_INTERFACE:-true}
+      - ENABLE_FIPS=${ENABLE_FIPS:-false}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - TZ=${TZ:-UTC}
+      
+      # OpenSSL 3.5 specific environment
+      - OPENSSL_CONF=/usr/local/openssl35/ssl/openssl.cnf
+      - LD_LIBRARY_PATH=/usr/local/openssl35/lib
+      - PATH=/usr/local/openssl35/bin:/usr/local/strongswan/sbin:/usr/local/strongswan/bin:/usr/local/bin:/usr/bin:/bin
+      
+      # Enterprise security settings
+      - STRONGSWAN_DEBUG_LEVEL=${STRONGSWAN_DEBUG_LEVEL:-2}
+      - CRYPTO_POLICY=${CRYPTO_POLICY:-enterprise}
+      - MAX_CONNECTIONS=${MAX_CONNECTIONS:-1000}
+      - SESSION_TIMEOUT=${SESSION_TIMEOUT:-3600}
+    
+    # Volume mounts
+    volumes:
+      - pqc-vpn-certs:/etc/ipsec.d
+      - pqc-vpn-logs:/var/log
+      - pqc-vpn-data:/opt/pqc-vpn/data
+      - pqc-vpn-config:/etc/pqc-vpn
+      - ./configs/hub:/opt/pqc-vpn/configs:ro
+      - ./scripts:/opt/pqc-vpn/scripts:ro
+      - /etc/localtime:/etc/localtime:ro
+    
+    # Security configuration
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - NET_BIND_SERVICE
+    
+    cap_drop:
+      - ALL
+    
+    security_opt:
+      - no-new-privileges:true
+    
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4G
+        reservations:
+          cpus: '0.5'
+          memory: 1G
+    
+    # Health check
+    healthcheck:
+      test: ["/opt/pqc-vpn/scripts/health-check.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    
+    restart: unless-stopped
+    
+    depends_on:
+      - redis
+      - prometheus
+    
+    sysctls:
+      - net.ipv4.ip_forward=1
+      - net.ipv4.conf.all.accept_redirects=0
+      - net.ipv4.conf.all.send_redirects=0
+      - net.ipv4.conf.all.accept_source_route=0
+
+  # Redis for session management and caching
+  redis:
+    image: redis:7.2-alpine
+    container_name: pqc-vpn-redis
+    hostname: redis
+    
+    networks:
+      pqc-vpn-net:
+        ipv4_address: 172.20.0.20
+    
+    ports:
+      - "6379:6379"
+    
+    volumes:
+      - pqc-vpn-redis:/data
+      - ./configs/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    
+    command: redis-server /usr/local/etc/redis/redis.conf
+    
+    # Security
+    security_opt:
+      - no-new-privileges:true
+    
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+    
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    
+    restart: unless-stopped
+
+  # Prometheus for metrics collection
+  prometheus:
+    image: prom/prometheus:v2.48.0
+    container_name: pqc-vpn-prometheus
+    hostname: prometheus
+    
+    networks:
+      pqc-vpn-net:
+        ipv4_address: 172.20.0.30
+    
+    ports:
+      - "9091:9090"
+    
+    volumes:
+      - pqc-vpn-prometheus:/prometheus
+      - ./configs/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./configs/monitoring/alert_rules.yml:/etc/prometheus/alert_rules.yml:ro
+    
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.enable-lifecycle'
+      - '--log.level=info'
+    
+    security_opt:
+      - no-new-privileges:true
+    
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2G
+        reservations:
+          cpus: '0.2'
+          memory: 512M
+    
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    
+    restart: unless-stopped
+
+  # Grafana for monitoring dashboard
+  grafana:
+    image: grafana/grafana:10.2.0
+    container_name: pqc-vpn-grafana
+    hostname: grafana
+    
+    networks:
+      pqc-vpn-net:
+        ipv4_address: 172.20.0.40
+    
+    ports:
+      - "3000:3000"
+    
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-pqcvpn2024!}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SECURITY_DISABLE_GRAVATAR=true
+      - GF_ANALYTICS_REPORTING_ENABLED=false
+      - GF_ANALYTICS_CHECK_FOR_UPDATES=false
+      - GF_INSTALL_PLUGINS=grafana-piechart-panel
+    
+    volumes:
+      - pqc-vpn-grafana:/var/lib/grafana
+      - ./configs/monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./configs/monitoring/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+    
+    security_opt:
+      - no-new-privileges:true
+    
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.2'
+          memory: 256M
+    
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:3000/api/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    
+    restart: unless-stopped
+    
+    depends_on:
+      - prometheus
+
+  # Node Exporter for system metrics
+  node-exporter:
+    image: prom/node-exporter:v1.7.0
+    container_name: pqc-vpn-node-exporter
+    hostname: node-exporter
+    
+    networks:
+      pqc-vpn-net:
+        ipv4_address: 172.20.0.50
+    
+    ports:
+      - "9100:9100"
+    
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.rootfs=/rootfs'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+      - '--collector.systemd'
+      - '--collector.processes'
+    
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    
+    security_opt:
+      - no-new-privileges:true
+    
+    deploy:
+      resources:
+        limits:
+          cpus: '0.2'
+          memory: 128M
+        reservations:
+          cpus: '0.05'
+          memory: 32M
+    
+    restart: unless-stopped
+
+  # strongSwan Exporter for VPN metrics
+  strongswan-exporter:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.strongswan-exporter
+    image: pqc-vpn/strongswan-exporter:latest
+    container_name: pqc-vpn-strongswan-exporter
+    hostname: strongswan-exporter
+    
+    networks:
+      pqc-vpn-net:
+        ipv4_address: 172.20.0.60
+    
+    ports:
+      - "9101:9101"
+    
+    environment:
+      - STRONGSWAN_VICI_SOCKET=${VICI_SOCKET:-/var/run/strongswan/charon-vici.socket}
+      - EXPORTER_PORT=9101
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    
+    volumes:
+      - pqc-vpn-strongswan-socket:/var/run/strongswan:ro
+    
+    security_opt:
+      - no-new-privileges:true
+    
+    deploy:
+      resources:
+        limits:
+          cpus: '0.2'
+          memory: 128M
+        reservations:
+          cpus: '0.05'
+          memory: 32M
+    
+    restart: unless-stopped
+    
+    depends_on:
+      - pqc-vpn-hub
+
+  # Log aggregation with Fluentd
+  fluentd:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.fluentd
+    image: pqc-vpn/fluentd:latest
+    container_name: pqc-vpn-fluentd
+    hostname: fluentd
+    
+    networks:
+      pqc-vpn-net:
+        ipv4_address: 172.20.0.70
+    
+    ports:
+      - "24224:24224"
+      - "24224:24224/udp"
+    
+    volumes:
+      - pqc-vpn-logs:/fluentd/log
+      - ./configs/fluentd:/fluentd/etc:ro
+    
+    environment:
+      - FLUENTD_CONF=fluent.conf
+      - FLUENTD_OPT=-v
+    
+    security_opt:
+      - no-new-privileges:true
+    
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+    
+    restart: unless-stopped
+
+  # Example client for testing
+  pqc-vpn-client:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.pqc-spoke
+      args:
+        OPENSSL_VERSION: "${OPENSSL_VERSION:-3.5.0}"
+    image: pqc-vpn/client-openssl35:latest
+    container_name: pqc-vpn-client-test
+    hostname: pqc-vpn-client
+    
+    networks:
+      pqc-vpn-net:
+        ipv4_address: 172.20.0.100
+    
+    environment:
+      - HUB_IP=${HUB_IP:-172.20.0.10}
+      - CLIENT_NAME=test-client
+      - OPENSSL_VERSION=${OPENSSL_VERSION:-3.5.0}
+      - OPENSSL_CONF=/usr/local/openssl35/ssl/openssl.cnf
+      - LD_LIBRARY_PATH=/usr/local/openssl35/lib
+    
+    volumes:
+      - pqc-vpn-client-certs:/etc/ipsec.d
+      - ./configs/client:/opt/pqc-vpn/configs:ro
+    
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    
+    security_opt:
+      - no-new-privileges:true
+    
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.2'
+          memory: 256M
+    
+    restart: "no"  # Manual start for testing
+    
+    depends_on:
+      - pqc-vpn-hub
+    
+    profiles:
+      - testing
+
+# Network configuration
+networks:
+  pqc-vpn-net:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.20.0.0/16
+          gateway: 172.20.0.1
+    driver_opts:
+      com.docker.network.bridge.name: pqc-vpn-br
+      com.docker.network.bridge.enable_icc: "true"
+      com.docker.network.bridge.enable_ip_masquerade: "true"
+
+# Volume configuration
+volumes:
+  pqc-vpn-certs:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./volumes/certs
+  
+  pqc-vpn-logs:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./volumes/logs
+  
+  pqc-vpn-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./volumes/data
+  
+  pqc-vpn-config:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./volumes/config
+  
+  pqc-vpn-redis:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./volumes/redis
+  
+  pqc-vpn-prometheus:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./volumes/prometheus
+  
+  pqc-vpn-grafana:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./volumes/grafana
+  
+  pqc-vpn-strongswan-socket:
+    driver: local
+  
+  pqc-vpn-client-certs:
+    driver: local
+
+# Additional configuration for production deployment
+configs:
+  strongswan_conf:
+    file: ./configs/hub/strongswan.conf
+  
+  ipsec_conf:
+    file: ./configs/hub/ipsec.conf
+  
+  prometheus_config:
+    file: ./configs/monitoring/prometheus.yml
+  
+  grafana_dashboard:
+    file: ./configs/monitoring/grafana/dashboards/pqc-vpn-dashboard.json
+
+# Secrets management (use Docker secrets in production)
+secrets:
+  ca_key:
+    file: ./secrets/ca-key.pem
+  
+  hub_key:
+    file: ./secrets/hub-key.pem
+  
+  grafana_password:
+    external: true
+
+# Service profiles for different deployment scenarios
+x-common-variables: &common-variables
+  OPENSSL_VERSION: "${OPENSSL_VERSION:-3.5.0}"
+  TZ: "${TZ:-UTC}"
+  LOG_LEVEL: "${LOG_LEVEL:-info}"
+
+x-security-defaults: &security-defaults
+  security_opt:
+    - no-new-privileges:true
+  
+  tmpfs:
+    - /tmp:noexec,nosuid,size=100m
+    - /var/tmp:noexec,nosuid,size=50m
+
+# Health check defaults
+x-healthcheck-defaults: &healthcheck-defaults
+  interval: 30s
+  timeout: 10s
+  retries: 3
+  start_period: 30s
