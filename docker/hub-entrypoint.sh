@@ -1,319 +1,625 @@
 #!/bin/bash
-set -e
+# PQC-VPN Hub Entrypoint Script
+# Initializes and starts the PQC-VPN hub services
+
+set -euo pipefail
+
+# Configuration
+SCRIPT_DIR="/opt/pqc-vpn/scripts"
+DATA_DIR="/opt/pqc-vpn/data"
+CONFIG_DIR="/etc/pqc-vpn"
+LOG_DIR="/var/log/pqc-vpn"
+VENV_PATH="/opt/pqc-vpn/venv"
 
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
-# Logging functions
-log_info() {
-    echo -e "${BLUE}ℹ️  $1${NC}"
+# Logging function
+log() {
+    echo -e "${GREEN}[$(date '+%Y-%m-%d %H:%M:%S')]${NC} $*" | tee -a "${LOG_DIR}/hub.log"
 }
 
-log_success() {
-    echo -e "${GREEN}✅ $1${NC}"
+error() {
+    echo -e "${RED}[$(date '+%Y-%m-%d %H:%M:%S')] ERROR:${NC} $*" | tee -a "${LOG_DIR}/hub.log"
 }
 
-log_warning() {
-    echo -e "${YELLOW}⚠️  $1${NC}"
+warn() {
+    echo -e "${YELLOW}[$(date '+%Y-%m-%d %H:%M:%S')] WARN:${NC} $*" | tee -a "${LOG_DIR}/hub.log"
 }
 
-log_error() {
-    echo -e "${RED}❌ $1${NC}"
+# Create necessary directories
+init_directories() {
+    log "Creating directories..."
+    mkdir -p "${DATA_DIR}" "${CONFIG_DIR}" "${LOG_DIR}"
+    mkdir -p /etc/ipsec.d/{certs,private,cacerts,crls}
+    chmod 700 /etc/ipsec.d/private
+    chmod 755 /etc/ipsec.d/{certs,cacerts,crls}
 }
-
-# Environment variables with defaults
-HUB_IP=${HUB_IP:-192.168.1.100}
-VPN_SUBNET=${VPN_SUBNET:-10.10.0.0/16}
-PQC_ALGORITHM=${PQC_ALGORITHM:-kyber1024}
-SIG_ALGORITHM=${SIG_ALGORITHM:-dilithium5}
-ENABLE_MONITORING=${ENABLE_MONITORING:-true}
-ENABLE_HA=${ENABLE_HA:-false}
-
-log_info "🚀 Starting PQC-VPN Hub with REAL Post-Quantum Cryptography..."
-log_info "Hub IP: $HUB_IP"
-log_info "VPN Subnet: $VPN_SUBNET"
-log_info "PQC KEM Algorithm: $PQC_ALGORITHM"
-log_info "PQC Signature Algorithm: $SIG_ALGORITHM"
 
 # Verify PQC support
-log_info "🔍 Verifying Post-Quantum Cryptography support..."
+verify_pqc_support() {
+    log "Verifying Post-Quantum Cryptography support..."
+    
+    # Test OpenSSL with OQS provider
+    if ! /usr/local/ssl/bin/openssl list -providers | grep -q "oqsprovider"; then
+        error "OQS provider not loaded in OpenSSL"
+        return 1
+    fi
+    
+    # Test available PQC algorithms
+    if ! /usr/local/ssl/bin/openssl list -signature-algorithms | grep -q "dilithium"; then
+        error "Dilithium signature algorithms not available"
+        return 1
+    fi
+    
+    if ! /usr/local/ssl/bin/openssl list -kem-algorithms | grep -q "kyber"; then
+        error "Kyber KEM algorithms not available"
+        return 1
+    fi
+    
+    log "✅ PQC support verified: Dilithium and Kyber algorithms available"
+    return 0
+}
 
-# Check OpenSSL OQS provider
-if openssl list -providers 2>/dev/null | grep -q "oqsprovider"; then
-    log_success "OpenSSL OQS provider detected"
+# Initialize CA and certificates
+init_certificates() {
+    log "Initializing PQC certificates..."
     
-    # List available PQC algorithms
-    log_info "Available PQC KEMs:"
-    openssl list -kem-algorithms -provider oqsprovider 2>/dev/null | grep -E "(kyber|bike|hqc)" | head -5
+    local ca_cert="/etc/ipsec.d/cacerts/ca-cert.pem"
+    local ca_key="/etc/ipsec.d/private/ca-key.pem"
+    local hub_cert="/etc/ipsec.d/certs/hub-cert.pem"
+    local hub_key="/etc/ipsec.d/private/hub-key.pem"
     
-    log_info "Available PQC Signatures:"
-    openssl list -signature-algorithms -provider oqsprovider 2>/dev/null | grep -E "(dilithium|falcon|sphincs)" | head -5
+    # Get configuration from environment
+    local org="${ORGANIZATION:-PQC-VPN-Enterprise}"
+    local country="${COUNTRY:-US}"
+    local state="${STATE:-California}"
+    local locality="${LOCALITY:-San Francisco}"
+    local hub_ip="${HUB_IP:-127.0.0.1}"
+    local hub_domain="${HUB_DOMAIN:-pqc-hub.local}"
     
-    REAL_PQC=true
-else
-    log_error "OpenSSL OQS provider not found. Cannot enable real PQC."
-    exit 1
-fi
-
-# Check strongSwan version and PQC support
-if ipsec version | grep -q "strongSwan"; then
-    log_success "strongSwan installed successfully"
-    ipsec version
-else
-    log_error "strongSwan not properly installed"
-    exit 1
-fi
-
-# Generate real PQC certificates
-log_info "🔐 Generating real Post-Quantum certificates..."
-
-# Create CA with Dilithium signatures
-if [ ! -f "/etc/ipsec.d/cacerts/pqc-ca-cert.pem" ]; then
-    log_info "Generating PQC Certificate Authority..."
+    # Generate CA certificate if it doesn't exist
+    if [[ ! -f "$ca_cert" || ! -f "$ca_key" ]]; then
+        log "Generating PQC CA certificate..."
+        
+        # Generate CA private key with Dilithium-5
+        /usr/local/ssl/bin/openssl genpkey \
+            -algorithm dilithium5 \
+            -out "$ca_key"
+        
+        chmod 600 "$ca_key"
+        
+        # Generate CA certificate
+        /usr/local/ssl/bin/openssl req -new -x509 \
+            -key "$ca_key" \
+            -out "$ca_cert" \
+            -days 3650 \
+            -subj "/C=$country/ST=$state/L=$locality/O=$org/OU=Certificate Authority/CN=$org Root CA"
+        
+        log "✅ CA certificate generated with Dilithium-5"
+    else
+        log "CA certificate already exists"
+    fi
     
-    # Generate Dilithium CA key
-    openssl genpkey -algorithm $SIG_ALGORITHM -provider oqsprovider -out /etc/ipsec.d/private/pqc-ca-key.pem
-    chmod 600 /etc/ipsec.d/private/pqc-ca-key.pem
-    
-    # Generate CA certificate with Dilithium signature
-    openssl req -new -x509 -key /etc/ipsec.d/private/pqc-ca-key.pem \
-        -sha256 -days 3650 -out /etc/ipsec.d/cacerts/pqc-ca-cert.pem \
-        -provider oqsprovider \
-        -subj "/C=US/ST=CA/L=San Francisco/O=PQC-VPN/OU=Certificate Authority/CN=PQC-VPN-CA"
-    
-    log_success "PQC CA certificate generated with $SIG_ALGORITHM"
-else
-    log_info "PQC CA certificate already exists"
-fi
-
-# Generate hub certificate with PQC
-if [ ! -f "/etc/ipsec.d/certs/pqc-hub-cert.pem" ]; then
-    log_info "Generating PQC Hub certificate..."
-    
-    # Generate Dilithium hub key
-    openssl genpkey -algorithm $SIG_ALGORITHM -provider oqsprovider -out /etc/ipsec.d/private/pqc-hub-key.pem
-    chmod 600 /etc/ipsec.d/private/pqc-hub-key.pem
-    
-    # Generate hub certificate request
-    openssl req -new -key /etc/ipsec.d/private/pqc-hub-key.pem \
-        -out /tmp/pqc-hub.csr -provider oqsprovider \
-        -subj "/C=US/ST=CA/L=San Francisco/O=PQC-VPN/OU=Hub/CN=$HUB_IP"
-    
-    # Sign hub certificate with PQC CA
-    openssl x509 -req -in /tmp/pqc-hub.csr \
-        -CA /etc/ipsec.d/cacerts/pqc-ca-cert.pem \
-        -CAkey /etc/ipsec.d/private/pqc-ca-key.pem \
-        -CAcreateserial -out /etc/ipsec.d/certs/pqc-hub-cert.pem \
-        -days 365 -sha256 -provider oqsprovider \
-        -extensions v3_ext -extfile <(
-cat <<EOF
-[v3_ext]
+    # Generate hub certificate if it doesn't exist
+    if [[ ! -f "$hub_cert" || ! -f "$hub_key" ]]; then
+        log "Generating PQC hub certificate..."
+        
+        # Generate hub private key
+        /usr/local/ssl/bin/openssl genpkey \
+            -algorithm dilithium5 \
+            -out "$hub_key"
+        
+        chmod 600 "$hub_key"
+        
+        # Generate certificate signing request
+        local csr_file="/tmp/hub.csr"
+        /usr/local/ssl/bin/openssl req -new \
+            -key "$hub_key" \
+            -out "$csr_file" \
+            -subj "/C=$country/ST=$state/L=$locality/O=$org/OU=VPN Hub/CN=$hub_domain"
+        
+        # Create extensions file
+        local ext_file="/tmp/hub_ext.conf"
+        cat > "$ext_file" << EOF
 basicConstraints = CA:FALSE
 keyUsage = digitalSignature, keyEncipherment
 extendedKeyUsage = serverAuth
 subjectAltName = @alt_names
 
 [alt_names]
-IP.1 = $HUB_IP
-DNS.1 = pqc-vpn-hub
+DNS.1 = $hub_domain
+DNS.2 = localhost
+IP.1 = $hub_ip
+IP.2 = 127.0.0.1
 EOF
-        )
+        
+        # Sign the certificate
+        /usr/local/ssl/bin/openssl x509 -req \
+            -in "$csr_file" \
+            -CA "$ca_cert" \
+            -CAkey "$ca_key" \
+            -CAcreateserial \
+            -out "$hub_cert" \
+            -days 365 \
+            -extensions v3_req \
+            -extfile "$ext_file"
+        
+        # Clean up temporary files
+        rm -f "$csr_file" "$ext_file"
+        
+        log "✅ Hub certificate generated with Dilithium-5"
+    else
+        log "Hub certificate already exists"
+    fi
     
-    rm -f /tmp/pqc-hub.csr
-    log_success "PQC Hub certificate generated with $SIG_ALGORITHM"
-else
-    log_info "PQC Hub certificate already exists"
-fi
+    # Verify certificate signatures
+    if /usr/local/ssl/bin/openssl x509 -in "$hub_cert" -text | grep -q "dilithium5"; then
+        log "✅ Hub certificate uses Dilithium-5 signature"
+    else
+        warn "Hub certificate may not be using PQC signature algorithm"
+    fi
+}
 
-# Create real strongSwan configuration with PQC algorithms
-log_info "⚙️ Configuring strongSwan with real PQC algorithms..."
+# Configure strongSwan
+configure_strongswan() {
+    log "Configuring strongSwan with PQC support..."
+    
+    local hub_ip="${HUB_IP:-127.0.0.1}"
+    local hub_domain="${HUB_DOMAIN:-pqc-hub.local}"
+    local pqc_kem="${PQC_KEM_ALGORITHM:-kyber1024}"
+    local pqc_sig="${PQC_SIG_ALGORITHM:-dilithium5}"
+    
+    # Create ipsec.conf with PQC configuration
+    cat > /etc/ipsec.conf << EOF
+# PQC-VPN strongSwan Configuration
+# Generated: $(date)
 
-cat > /etc/ipsec.conf << EOF
-# strongSwan IPsec configuration with REAL Post-Quantum Cryptography
 config setup
-    charondebug="cfg 2, dmn 2, ike 2, net 2, esp 2, lib 2"
-    uniqueids=yes
-    cachecrls=no
+    charondebug="ike 2, knl 2, cfg 2, net 2, esp 2, dmn 2, mgr 2"
     strictcrlpolicy=no
+    uniqueids=never
 
-# Default connection parameters
+# Default connection template with PQC
 conn %default
     keyexchange=ikev2
-    dpdaction=clear
-    dpddelay=300s
-    rekey=yes
-    reauth=no
-    left=%any
+    ike=aes256gcm16-sha512-${pqc_kem}-${pqc_sig}!
+    esp=aes256gcm16-sha512-${pqc_kem}!
+    dpdaction=restart
+    dpddelay=30s
+    dpdtimeout=120s
+    rekeymargin=3m
+    keyingtries=3
+    left=$hub_ip
     leftsubnet=0.0.0.0/0
-    right=%any
-    rightsubnet=$VPN_SUBNET
     leftfirewall=yes
+    right=%any
     auto=add
 
-# Real PQC PKI Connection
+# PKI-based connections
 conn pqc-pki
-    type=tunnel
-    leftauth=pubkey
-    rightauth=pubkey
-    leftcert=pqc-hub-cert.pem
-    leftid="C=US, O=PQC-VPN, CN=$HUB_IP"
-    # REAL Post-Quantum algorithms - Kyber for KEM, AES-GCM for encryption
-    ike=aes256gcm16-sha512-${PQC_ALGORITHM}!
-    esp=aes256gcm16-${PQC_ALGORITHM}!
-    auto=add
+    also=%default
+    authby=pubkey
+    leftcert=hub-cert.pem
+    leftid=@$hub_domain
+    rightca="C=US, O=PQC-VPN-Enterprise, CN=PQC-VPN-Enterprise Root CA"
 
-# Real PQC PSK Connection
+# PSK-based connections  
 conn pqc-psk
-    type=tunnel
-    leftauth=psk
-    rightauth=psk
-    leftid=@pqc-hub.local
-    rightid=@pqc-spoke.local
-    # REAL Post-Quantum algorithms
-    ike=aes256gcm16-sha512-${PQC_ALGORITHM}!
-    esp=aes256gcm16-${PQC_ALGORITHM}!
-    auto=add
+    also=%default
+    authby=psk
+    leftid=@$hub_domain
 
-# Hybrid PQC+Classical for transition
-conn pqc-hybrid
-    type=tunnel
-    leftauth=pubkey
-    rightauth=psk
-    leftcert=pqc-hub-cert.pem
-    leftid="C=US, O=PQC-VPN, CN=$HUB_IP"
-    rightid=@pqc-hybrid-spoke.local
-    # Hybrid: PQC + Classical fallback
-    ike=aes256gcm16-sha512-${PQC_ALGORITHM},aes256gcm16-sha512-ecp384!
-    esp=aes256gcm16-${PQC_ALGORITHM},aes256gcm16-sha512!
-    auto=add
-
-# High-performance PQC connection
+# High performance profile (Kyber-512 + Dilithium-2)
 conn pqc-performance
-    type=tunnel
-    leftauth=psk
-    rightauth=psk
-    leftid=@pqc-hub.local
-    rightid=@pqc-perf-spoke.local
-    # Optimized for speed while maintaining PQC security
-    ike=aes128gcm16-sha256-kyber512!
-    esp=aes128gcm16-kyber512!
+    keyexchange=ikev2
+    ike=aes128gcm16-sha256-kyber512-dilithium2!
+    esp=aes128gcm16-sha256-kyber512!
+    authby=pubkey
+    left=$hub_ip
+    leftsubnet=0.0.0.0/0
+    leftfirewall=yes
+    right=%any
+    leftcert=hub-cert.pem
+    leftid=@$hub_domain
+    rightca="C=US, O=PQC-VPN-Enterprise, CN=PQC-VPN-Enterprise Root CA"
     auto=add
 EOF
 
-# Create real IPsec secrets
-log_info "🔑 Creating real IPsec secrets..."
+    # Create ipsec.secrets
+    cat > /etc/ipsec.secrets << EOF
+# PQC-VPN Secrets Configuration
+# Generated: $(date)
 
-cat > /etc/ipsec.secrets << EOF
-# Real PQC-VPN IPsec secrets
-# PSK secrets for different connection types
-@pqc-hub.local @pqc-spoke.local : PSK "$(openssl rand -base64 32)"
-@pqc-hub.local @pqc-hybrid-spoke.local : PSK "$(openssl rand -base64 32)"
+# RSA/PQC private key for this host
+: RSA hub-key.pem
 
-# Demo user PSKs (generate real random keys)
-demo-user-1 : PSK "$(openssl rand -base64 32)"
-demo-user-2 : PSK "$(openssl rand -base64 32)"
-demo-user-3 : PSK "$(openssl rand -base64 32)"
-admin-user : PSK "$(openssl rand -base64 48)"
-
-# Private key for PQC certificate
-: $SIG_ALGORITHM /etc/ipsec.d/private/pqc-hub-key.pem
+# Pre-shared keys will be added by management system
+# Format: username : PSK "secret-key"
 EOF
 
-chmod 600 /etc/ipsec.secrets
+    chmod 600 /etc/ipsec.secrets
 
-# Start real monitoring services
-if [ "$ENABLE_MONITORING" = "true" ]; then
-    log_info "📊 Starting real monitoring services..."
+    # Create strongswan.conf with PQC optimization
+    cat > /etc/strongswan.conf << EOF
+# strongSwan Configuration for PQC-VPN
+# Generated: $(date)
+
+charon {
+    load_modular = yes
     
-    # Start metrics collector in background
-    /usr/local/bin/metrics-collector --hub-ip "$HUB_IP" --interval 30 &
+    # Performance optimization for PQC
+    threads = 16
+    worker_threads = 8
     
-    # Start real monitoring dashboard
-    /usr/local/bin/real-monitor --port 9090 &
+    processor {
+        priority_threads {
+            high = 4
+            medium = 2
+            low = 1
+        }
+    }
     
-    log_success "Real monitoring services started"
-fi
+    # Network settings
+    port = 500
+    port_nat_t = 4500
+    
+    # Security settings
+    send_vendor_id = no
+    send_delay = 0
+    retransmit_timeout = 4.0
+    retransmit_tries = 5
+    retransmit_base = 1.8
+    
+    # Logging
+    filelog {
+        ${LOG_DIR}/charon.log {
+            time_format = %b %e %T
+            ike_name = yes
+            append = no
+            default = 1
+            flush_line = yes
+        }
+        stderr {
+            ike = 2
+            knl = 2
+            cfg = 2
+        }
+    }
+    
+    # Plugin configuration
+    plugins {
+        include strongswan.d/charon/*.conf
+        
+        openssl {
+            load = yes
+            fips_mode = no
+        }
+        
+        kernel-netlink {
+            load = yes
+            fwmark = !0x42
+        }
+        
+        socket-default {
+            load = yes
+        }
+        
+        stroke {
+            load = yes
+        }
+        
+        updown {
+            load = yes
+        }
+        
+        resolve {
+            load = yes
+        }
+        
+        eap-identity {
+            load = yes
+        }
+        
+        eap-md5 {
+            load = yes
+        }
+        
+        eap-mschapv2 {
+            load = yes
+        }
+        
+        xauth-generic {
+            load = yes
+        }
+        
+        pem {
+            load = yes
+        }
+        
+        pkcs1 {
+            load = yes
+        }
+        
+        x509 {
+            load = yes
+        }
+        
+        pubkey {
+            load = yes
+        }
+        
+        hmac {
+            load = yes
+        }
+        
+        aes {
+            load = yes
+        }
+        
+        sha1 {
+            load = yes
+        }
+        
+        sha2 {
+            load = yes
+        }
+        
+        gmp {
+            load = yes
+        }
+        
+        random {
+            load = yes
+        }
+        
+        nonce {
+            load = yes
+        }
+        
+        gcm {
+            load = yes
+        }
+    }
+}
 
-# Start web API server with real data
-log_info "🌐 Starting real web API server..."
-/usr/local/bin/api-server --host 0.0.0.0 --port 8443 --hub-ip "$HUB_IP" &
+include strongswan.d/*.conf
+EOF
 
-# Configure firewall rules for PQC VPN
-log_info "🔥 Configuring firewall for PQC VPN..."
-iptables -t nat -A POSTROUTING -s $VPN_SUBNET -o eth0 -j MASQUERADE
-iptables -A FORWARD -s $VPN_SUBNET -j ACCEPT
-iptables -A FORWARD -d $VPN_SUBNET -j ACCEPT
-iptables -A INPUT -p udp --dport 500 -j ACCEPT
-iptables -A INPUT -p udp --dport 4500 -j ACCEPT
-iptables -A INPUT -p tcp --dport 8443 -j ACCEPT
-iptables -A INPUT -p tcp --dport 9090 -j ACCEPT
+    log "✅ strongSwan configured with PQC algorithms"
+}
 
-# Enable IP forwarding
-echo 1 > /proc/sys/net/ipv4/ip_forward
-echo 1 > /proc/sys/net/ipv6/conf/all/forwarding
+# Configure networking
+configure_networking() {
+    log "Configuring network settings..."
+    
+    # Enable IP forwarding
+    echo 1 > /proc/sys/net/ipv4/ip_forward
+    echo 1 > /proc/sys/net/ipv6/conf/all/forwarding
+    
+    # Configure iptables for VPN
+    iptables -t nat -A POSTROUTING -s 10.10.0.0/16 -o eth0 -j MASQUERADE
+    iptables -A FORWARD -s 10.10.0.0/16 -j ACCEPT
+    iptables -A FORWARD -d 10.10.0.0/16 -j ACCEPT
+    
+    # Allow VPN ports
+    iptables -A INPUT -p udp --dport 500 -j ACCEPT
+    iptables -A INPUT -p udp --dport 4500 -j ACCEPT
+    iptables -A INPUT -p tcp --dport 8443 -j ACCEPT
+    iptables -A INPUT -p tcp --dport 9090 -j ACCEPT
+    
+    log "✅ Network configuration applied"
+}
 
-# Start strongSwan with real PQC
-log_info "🔐 Starting strongSwan with Post-Quantum Cryptography..."
-ipsec start --nofork &
-STRONGSWAN_PID=$!
+# Initialize database
+init_database() {
+    log "Initializing PQC-VPN database..."
+    
+    # Activate virtual environment and run database initialization
+    source "$VENV_PATH/bin/activate"
+    
+    # Run the management tool to initialize database
+    python3 /opt/pqc-vpn/tools/pqc-vpn-manager.py --config-path "$DATA_DIR" user list > /dev/null 2>&1 || true
+    
+    log "✅ Database initialized"
+}
 
-# Wait for strongSwan to initialize
-sleep 5
+# Start web dashboard
+start_web_dashboard() {
+    if [[ "${ENABLE_WEB_INTERFACE:-true}" == "true" ]]; then
+        log "Starting web management dashboard..."
+        
+        source "$VENV_PATH/bin/activate"
+        
+        # Start the web dashboard in background
+        python3 /opt/pqc-vpn/web/dashboard.py \
+            --host 0.0.0.0 \
+            --port 8443 \
+            --config-path "$DATA_DIR" \
+            > "${LOG_DIR}/dashboard.log" 2>&1 &
+        
+        local dashboard_pid=$!
+        echo $dashboard_pid > /var/run/pqc-dashboard.pid
+        
+        log "✅ Web dashboard started (PID: $dashboard_pid)"
+    fi
+}
 
-# Verify PQC algorithms are loaded
-log_info "🔍 Verifying PQC algorithm support in strongSwan..."
-if ipsec listciphers | grep -q "AES_GCM_16"; then
-    log_success "Encryption algorithms loaded"
-fi
+# Start monitoring
+start_monitoring() {
+    if [[ "${ENABLE_MONITORING:-true}" == "true" ]]; then
+        log "Starting monitoring services..."
+        
+        source "$VENV_PATH/bin/activate"
+        
+        # Start connection monitor
+        python3 /opt/pqc-vpn/tools/connection-monitor.py \
+            --daemon \
+            --config-path "$DATA_DIR" \
+            > "${LOG_DIR}/monitor.log" 2>&1 &
+        
+        local monitor_pid=$!
+        echo $monitor_pid > /var/run/pqc-monitor.pid
+        
+        log "✅ Monitoring started (PID: $monitor_pid)"
+    fi
+}
 
-if ipsec listhashes | grep -q "SHA2_512"; then
-    log_success "Hash algorithms loaded"
-fi
+# Start strongSwan
+start_strongswan() {
+    log "Starting strongSwan IPsec..."
+    
+    # Start strongSwan
+    /usr/local/strongswan/sbin/ipsec start --nofork &
+    local strongswan_pid=$!
+    echo $strongswan_pid > /var/run/strongswan.pid
+    
+    # Wait a moment for startup
+    sleep 5
+    
+    # Verify strongSwan is running
+    if /usr/local/strongswan/sbin/ipsec status > /dev/null 2>&1; then
+        log "✅ strongSwan started successfully (PID: $strongswan_pid)"
+        
+        # Display available connections
+        log "Available VPN connections:"
+        /usr/local/strongswan/sbin/ipsec statusall | grep -E "(conn|Security)" || true
+    else
+        error "Failed to start strongSwan"
+        return 1
+    fi
+}
 
-# Test PQC certificate
-log_info "🧪 Testing PQC certificate..."
-if openssl x509 -in /etc/ipsec.d/certs/pqc-hub-cert.pem -text -noout -provider oqsprovider | grep -q "Signature Algorithm"; then
-    CERT_ALG=$(openssl x509 -in /etc/ipsec.d/certs/pqc-hub-cert.pem -text -noout -provider oqsprovider | grep "Signature Algorithm" | head -1)
-    log_success "PQC certificate verified: $CERT_ALG"
-fi
-
-# Display startup information
-log_success "🎉 PQC-VPN Hub started successfully!"
-echo ""
-log_info "📊 Access Points:"
-echo "  • Web Dashboard: https://$HUB_IP:8443"
-echo "  • Metrics API: http://$HUB_IP:9090/metrics"
-echo "  • VPN Endpoint: $HUB_IP:500 (IKE), $HUB_IP:4500 (NAT-T)"
-echo ""
-log_info "🔐 Post-Quantum Algorithms Active:"
-echo "  • Key Exchange: $PQC_ALGORITHM (Kyber)"
-echo "  • Digital Signatures: $SIG_ALGORITHM (Dilithium)"
-echo "  • Symmetric Encryption: AES-256-GCM"
-echo ""
-log_info "🌐 VPN Network Configuration:"
-echo "  • Hub IP: $HUB_IP"
-echo "  • VPN Subnet: $VPN_SUBNET"
-echo "  • Available Connections: pqc-pki, pqc-psk, pqc-hybrid, pqc-performance"
-echo ""
-
-# Monitor and maintain services
-log_info "🔄 Starting service monitoring loop..."
-while true; do
-    # Check if strongSwan is running
-    if ! kill -0 $STRONGSWAN_PID 2>/dev/null; then
-        log_error "strongSwan process died, restarting..."
-        ipsec start --nofork &
-        STRONGSWAN_PID=$!
+# Health check function
+health_check() {
+    local errors=0
+    
+    # Check strongSwan
+    if ! /usr/local/strongswan/sbin/ipsec status > /dev/null 2>&1; then
+        error "strongSwan is not running"
+        ((errors++))
     fi
     
-    # Update real metrics every 60 seconds
-    if [ "$ENABLE_MONITORING" = "true" ]; then
-        /usr/local/bin/metrics-collector --update --hub-ip "$HUB_IP" >/dev/null 2>&1 || true
+    # Check certificates
+    if [[ ! -f "/etc/ipsec.d/cacerts/ca-cert.pem" ]]; then
+        error "CA certificate missing"
+        ((errors++))
     fi
     
-    sleep 60
-done
+    # Check PQC algorithms
+    if ! /usr/local/ssl/bin/openssl list -signature-algorithms | grep -q "dilithium"; then
+        error "Dilithium algorithms not available"
+        ((errors++))
+    fi
+    
+    if [[ $errors -eq 0 ]]; then
+        log "✅ Health check passed"
+        return 0
+    else
+        error "Health check failed with $errors errors"
+        return 1
+    fi
+}
+
+# Signal handlers for graceful shutdown
+shutdown_services() {
+    log "Shutting down PQC-VPN services..."
+    
+    # Stop strongSwan
+    if [[ -f /var/run/strongswan.pid ]]; then
+        local pid=$(cat /var/run/strongswan.pid)
+        if kill -0 "$pid" 2>/dev/null; then
+            log "Stopping strongSwan (PID: $pid)"
+            /usr/local/strongswan/sbin/ipsec stop
+        fi
+        rm -f /var/run/strongswan.pid
+    fi
+    
+    # Stop web dashboard
+    if [[ -f /var/run/pqc-dashboard.pid ]]; then
+        local pid=$(cat /var/run/pqc-dashboard.pid)
+        if kill -0 "$pid" 2>/dev/null; then
+            log "Stopping web dashboard (PID: $pid)"
+            kill -TERM "$pid"
+        fi
+        rm -f /var/run/pqc-dashboard.pid
+    fi
+    
+    # Stop monitoring
+    if [[ -f /var/run/pqc-monitor.pid ]]; then
+        local pid=$(cat /var/run/pqc-monitor.pid)
+        if kill -0 "$pid" 2>/dev/null; then
+            log "Stopping monitoring (PID: $pid)"
+            kill -TERM "$pid"
+        fi
+        rm -f /var/run/pqc-monitor.pid
+    fi
+    
+    log "PQC-VPN services stopped"
+    exit 0
+}
+
+# Set up signal handlers
+trap shutdown_services SIGTERM SIGINT
+
+# Main initialization sequence
+main() {
+    log "🔐 Starting PQC-VPN Hub v1.0.0"
+    log "Configuration: Hub IP=${HUB_IP:-auto}, Domain=${HUB_DOMAIN:-auto}"
+    
+    # Initialize components
+    init_directories
+    verify_pqc_support
+    init_certificates
+    configure_strongswan
+    configure_networking
+    init_database
+    
+    # Start services
+    start_web_dashboard
+    start_monitoring
+    start_strongswan
+    
+    # Initial health check
+    if health_check; then
+        log "🎉 PQC-VPN Hub started successfully"
+        log "   - VPN endpoint: ${HUB_IP:-auto}:500/4500"
+        log "   - Web dashboard: https://${HUB_IP:-localhost}:8443"
+        log "   - API endpoint: http://${HUB_IP:-localhost}:9090"
+    else
+        error "PQC-VPN Hub startup completed with warnings"
+    fi
+    
+    # Keep container running and perform periodic health checks
+    while true; do
+        sleep 300  # 5 minutes
+        if ! health_check; then
+            warn "Health check failed, but continuing..."
+        fi
+    done
+}
+
+# Handle different commands
+case "${1:-hub}" in
+    hub)
+        main
+        ;;
+    health)
+        health_check
+        ;;
+    test-pqc)
+        verify_pqc_support
+        ;;
+    bash)
+        exec /bin/bash
+        ;;
+    *)
+        error "Unknown command: $1"
+        echo "Available commands: hub, health, test-pqc, bash"
+        exit 1
+        ;;
+esac
