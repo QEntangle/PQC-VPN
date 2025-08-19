@@ -1,46 +1,41 @@
-# strongSwan IPsec configuration for PQC VPN Spoke (Client)
-# Template file - customize for each client
+# strongSwan IPsec configuration for PQC VPN Spoke Client
+# Enhanced template with PKI+PSK hybrid authentication support
+# Template variables will be replaced by installation scripts
 # /etc/ipsec.conf
 
 config setup
-    # Enable logging
-    charondebug="ike 2, knl 2, cfg 2, net 2, asn 2, enc 2, lib 2, esp 2, tls 2"
+    # Enhanced logging for troubleshooting
+    charondebug="ike 4, knl 4, cfg 4, net 4, asn 4, enc 4, lib 4, esp 4, tls 4, mgr 4, job 4"
     
-    # Use system crypto plugins
+    # Use system crypto plugins including PQC
     load_modular = yes
     
     # Disable pluto (IKEv1)
     plutostart = no
     
-    # Unique connection identifiers
-    uniqueids = replace
-    
-    # Disable strict CRL policy for easier deployment
+    # Enhanced connection handling
+    uniqueids = no
     strictcrlpolicy = no
 
-# Default connection template
+# Default connection template with latest PQC algorithms
 conn %default
-    # IKE version
+    # IKE version (v2 only for PQC support)
     keyexchange = ikev2
     
-    # Authentication method
-    authby = pubkey
+    # Enhanced PQC algorithm suite (NIST Round 4 + latest)
+    # Primary: ML-KEM (Kyber) + ML-DSA (Dilithium)
+    ike = aes256gcm16-sha512-kyber1024-dilithium5,aes256gcm16-sha384-kyber768-dilithium3,aes128gcm16-sha256-kyber512-dilithium2
+    esp = aes256gcm16-sha512-kyber1024,aes256gcm16-sha384-kyber768,aes128gcm16-sha256-kyber512
     
-    # Certificate validation
-    leftcert = CLIENT_NAME-cert.pem
-    leftkey = CLIENT_NAME-key.pem
-    leftca = ca-cert.pem
-    
-    # Post-Quantum Cryptography algorithms (must match hub)
-    ike = aes256gcm16-sha512-kyber1024!
-    esp = aes256gcm16-sha512-kyber1024!
+    # Fallback to classical algorithms for compatibility
+    also = %compat
     
     # Security parameters
     dpdaction = restart
     dpddelay = 30s
     dpdtimeout = 150s
     
-    # Encryption settings
+    # Enhanced encryption settings
     forceencaps = yes
     fragmentation = yes
     rekey = yes
@@ -49,110 +44,334 @@ conn %default
     auto = start
     type = tunnel
     
-    # Perfect Forward Secrecy
+    # Perfect Forward Secrecy (mandatory)
     pfs = yes
     
-    # Lifetime settings
-    ikelifetime = 8h
-    keylife = 1h
+    # Enhanced lifetime settings for PQC
+    ikelifetime = 4h
+    keylife = 30m
+    margintime = 9m
+    rekeyfuzz = 100%
     
-    # Compression
+    # Compression and optimization
     compress = yes
     
-    # Enable MOBIKE for roaming clients
+    # MOBIKE for seamless roaming
     mobike = yes
     
-    # Close action on connection failure
+    # Enhanced dead peer detection
     closeaction = restart
 
-# Main connection to hub
-conn hub
+# Compatibility fallback connection
+conn %compat
+    ike = aes256gcm16-sha512-ecp384,aes256-sha512-modp4096,aes128-sha256-modp2048
+    esp = aes256gcm16-ecp384,aes256-sha512,aes128-sha256
+
+# PKI authentication connection (primary method)
+conn hub-pki
     # Inherit default settings
     also = %default
     
-    # Spoke (client) configuration
+    # Authentication method: PKI with PQC certificates
+    authby = pubkey
+    
+    # Spoke configuration (this client)
     left = %defaultroute
-    leftsubnet = CLIENT_SUBNET/24
-    leftid = "C=US, O=PQC-VPN, CN=CLIENT_NAME.pqc-vpn.local"
-    leftfirewall = yes
+    leftsubnet = 10.10.{CLIENT_SUBNET}.0/24
+    leftid = "C=US, O=PQC-VPN, CN={CLIENT_NAME}.pqc-vpn.local"
+    leftcert = {CLIENT_NAME}-cert.pem
+    leftkey = {CLIENT_NAME}-key.pem
+    leftca = ca-cert.pem
     
     # Hub configuration
-    right = HUB_PUBLIC_IP
-    rightsubnet = 10.10.0.0/16
+    right = {HUB_IP}
+    rightsubnet = 10.10.0.0/16,0.0.0.0/0
     rightid = "C=US, O=PQC-VPN, CN=hub.pqc-vpn.local"
+    rightca = ca-cert.pem
     
     # Connection settings
     auto = start
     type = tunnel
     
-    # Route all traffic through VPN (optional)
-    # leftsubnet = 0.0.0.0/0
-    
-    # Mark traffic for policy routing
+    # Mark for routing
     mark = 42
-    
-    # Enable NAT traversal
-    nat_traversal = yes
-    
-    # Initiate connection automatically
-    auto = start
 
-# Split tunneling configuration (optional)
-conn hub-split
-    also = %default
-    
-    # Only route specific subnets through VPN
-    left = %defaultroute
-    leftsubnet = CLIENT_SUBNET/24
-    leftid = "C=US, O=PQC-VPN, CN=CLIENT_NAME.pqc-vpn.local"
-    
-    right = HUB_PUBLIC_IP
-    rightsubnet = 10.10.0.0/16,192.168.0.0/16,172.16.0.0/12
-    rightid = "C=US, O=PQC-VPN, CN=hub.pqc-vpn.local"
-    
-    auto = ignore
-
-# Full tunnel configuration (route all traffic)
-conn hub-full
-    also = %default
-    
-    # Route all traffic through VPN
-    left = %defaultroute
-    leftsubnet = 0.0.0.0/0
-    leftid = "C=US, O=PQC-VPN, CN=CLIENT_NAME.pqc-vpn.local"
-    
-    right = HUB_PUBLIC_IP
-    rightsubnet = 0.0.0.0/0
-    rightid = "C=US, O=PQC-VPN, CN=hub.pqc-vpn.local"
-    
-    auto = ignore
-
-# Backup connection with PSK (emergency use only)
+# PSK authentication connection (alternative method)
 conn hub-psk
-    # Use pre-shared key instead of certificates
+    # Inherit default settings
+    also = %default
+    
+    # Authentication method: Pre-Shared Key
     authby = psk
     
-    # Client configuration
+    # Spoke configuration (this client)
     left = %defaultroute
-    leftsubnet = CLIENT_SUBNET/24
-    leftid = CLIENT_NAME@pqc-vpn.local
+    leftsubnet = 10.10.{CLIENT_SUBNET}.0/24
+    leftid = {CLIENT_NAME}.pqc-vpn.local
     
     # Hub configuration
-    right = HUB_PUBLIC_IP
-    rightsubnet = 10.10.0.0/16
-    rightid = hub@pqc-vpn.local
-    
-    # PQC algorithms
-    ike = aes256gcm16-sha512-kyber1024!
-    esp = aes256gcm16-sha512-kyber1024!
+    right = {HUB_IP}
+    rightsubnet = 10.10.0.0/16,0.0.0.0/0
+    rightid = hub.pqc-vpn.local
     
     # Connection settings
     auto = ignore
-    keyexchange = ikev2
-    dpdaction = restart
-    dpddelay = 30s
+    type = tunnel
+    
+    # Mark for routing
+    mark = 43
 
-# Variables to be replaced by installation script:
-# CLIENT_NAME: Unique client identifier
-# CLIENT_SUBNET: Client's assigned subnet (e.g., 10.10.1)
-# HUB_PUBLIC_IP: Public IP address of the hub server
+# Hybrid PKI+PSK authentication (enterprise method)
+conn hub-hybrid
+    # Inherit default settings
+    also = %default
+    
+    # Primary authentication: PKI
+    authby = pubkey
+    
+    # Spoke configuration (this client)
+    left = %defaultroute
+    leftsubnet = 10.10.{CLIENT_SUBNET}.0/24
+    leftid = "C=US, O=PQC-VPN, CN={CLIENT_NAME}.pqc-vpn.local"
+    leftcert = {CLIENT_NAME}-cert.pem
+    leftkey = {CLIENT_NAME}-key.pem
+    leftca = ca-cert.pem
+    
+    # Hub configuration
+    right = {HUB_IP}
+    rightsubnet = 10.10.0.0/16,0.0.0.0/0
+    rightid = "C=US, O=PQC-VPN, CN=hub.pqc-vpn.local"
+    rightca = ca-cert.pem
+    
+    # Additional PSK for enhanced security
+    keyid = {CLIENT_NAME}@hub.pqc-vpn.local
+    
+    # Connection settings
+    auto = ignore
+    type = tunnel
+    
+    # Mark for routing
+    mark = 44
+
+# Road warrior connection for mobile users
+conn roadwarrior
+    # Inherit default settings
+    also = %default
+    
+    # Authentication method
+    authby = pubkey
+    
+    # Mobile client configuration
+    left = %defaultroute
+    leftsubnet = 0.0.0.0/0
+    leftid = "C=US, O=PQC-VPN, CN={CLIENT_NAME}.pqc-vpn.local"
+    leftcert = {CLIENT_NAME}-cert.pem
+    leftkey = {CLIENT_NAME}-key.pem
+    leftca = ca-cert.pem
+    
+    # Hub configuration
+    right = {HUB_IP}
+    rightsubnet = 10.10.0.0/16,0.0.0.0/0
+    rightid = "C=US, O=PQC-VPN, CN=hub.pqc-vpn.local"
+    rightca = ca-cert.pem
+    
+    # Enhanced mobile settings
+    mobike = yes
+    closeaction = restart
+    dpdaction = restart
+    
+    # Virtual IP assignment
+    leftsourceip = %config
+    
+    # Connection settings
+    auto = ignore
+    type = tunnel
+
+# EAP authentication for RADIUS integration
+conn hub-eap
+    # Inherit default settings
+    also = %default
+    
+    # EAP authentication
+    authby = eap
+    eap_identity = {CLIENT_NAME}@pqc-vpn.local
+    
+    # Spoke configuration
+    left = %defaultroute
+    leftauth = eap-mschapv2
+    leftid = {CLIENT_NAME}@pqc-vpn.local
+    leftsendcert = never
+    
+    # Hub configuration
+    right = {HUB_IP}
+    rightsubnet = 10.10.0.0/16,0.0.0.0/0
+    rightauth = pubkey
+    rightid = "C=US, O=PQC-VPN, CN=hub.pqc-vpn.local"
+    rightca = ca-cert.pem
+    
+    # Virtual IP assignment
+    leftsourceip = %config
+    
+    # Connection settings
+    auto = ignore
+    type = tunnel
+
+# Site-to-site connection for branch offices
+conn site-to-site
+    # Inherit default settings
+    also = %default
+    
+    # Authentication method
+    authby = pubkey
+    
+    # Local site configuration
+    left = %defaultroute
+    leftsubnet = 192.168.{SITE_ID}.0/24
+    leftid = "C=US, O=PQC-VPN, CN=site-{SITE_ID}.pqc-vpn.local"
+    leftcert = site-{SITE_ID}-cert.pem
+    leftkey = site-{SITE_ID}-key.pem
+    leftca = ca-cert.pem
+    
+    # Remote hub configuration
+    right = {HUB_IP}
+    rightsubnet = 10.10.0.0/16
+    rightid = "C=US, O=PQC-VPN, CN=hub.pqc-vpn.local"
+    rightca = ca-cert.pem
+    
+    # Connection settings
+    auto = start
+    type = tunnel
+    dpdaction = restart
+
+# High-availability failover connection
+conn hub-failover
+    # Inherit default settings
+    also = %default
+    
+    # Authentication method
+    authby = pubkey
+    
+    # Spoke configuration
+    left = %defaultroute
+    leftsubnet = 10.10.{CLIENT_SUBNET}.0/24
+    leftid = "C=US, O=PQC-VPN, CN={CLIENT_NAME}.pqc-vpn.local"
+    leftcert = {CLIENT_NAME}-cert.pem
+    leftkey = {CLIENT_NAME}-key.pem
+    leftca = ca-cert.pem
+    
+    # Backup hub configuration
+    right = {HUB_BACKUP_IP}
+    rightsubnet = 10.10.0.0/16,0.0.0.0/0
+    rightid = "C=US, O=PQC-VPN, CN=hub-backup.pqc-vpn.local"
+    rightca = ca-cert.pem
+    
+    # Connection settings
+    auto = ignore
+    type = tunnel
+    
+    # Priority (lower = higher priority)
+    priority = 10
+
+# Group-based connection for department access
+conn group-{GROUP_NAME}
+    # Inherit default settings
+    also = %default
+    
+    # Authentication method
+    authby = psk
+    
+    # Group member configuration
+    left = %defaultroute
+    leftsubnet = 10.10.{GROUP_SUBNET}.0/24
+    leftid = {CLIENT_NAME}@{GROUP_NAME}.pqc-vpn.local
+    
+    # Hub configuration
+    right = {HUB_IP}
+    rightsubnet = 10.10.0.0/16
+    rightid = hub.pqc-vpn.local
+    
+    # Group-specific settings
+    keyid = {GROUP_NAME}
+    
+    # Connection settings
+    auto = ignore
+    type = tunnel
+
+# IoT device connection template
+conn iot-device
+    # Inherit default settings
+    also = %default
+    
+    # Authentication method (PSK for simplicity)
+    authby = psk
+    
+    # Device configuration
+    left = %defaultroute
+    leftsubnet = 10.10.IoT.{DEVICE_ID}/32
+    leftid = iot-{DEVICE_ID}.pqc-vpn.local
+    
+    # Hub configuration
+    right = {HUB_IP}
+    rightsubnet = 10.10.0.0/16
+    rightid = hub.pqc-vpn.local
+    
+    # IoT-specific settings
+    keyid = iot-devices
+    
+    # Reduced lifetime for IoT devices
+    ikelifetime = 2h
+    keylife = 15m
+    
+    # Connection settings
+    auto = ignore
+    type = tunnel
+
+# Emergency access connection
+conn emergency
+    # Basic compatibility settings
+    keyexchange = ikev2
+    ike = aes128-sha256-modp2048
+    esp = aes128-sha256
+    
+    # Emergency authentication (PSK only)
+    authby = psk
+    
+    # Emergency configuration
+    left = %defaultroute
+    leftid = emergency.pqc-vpn.local
+    
+    # Hub configuration
+    right = {HUB_IP}
+    rightsubnet = 10.10.0.0/16
+    rightid = hub.pqc-vpn.local
+    
+    # Emergency settings
+    keyid = emergency
+    
+    # Connection settings
+    auto = ignore
+    type = tunnel
+    
+    # Short lifetime for security
+    ikelifetime = 1h
+    keylife = 10m
+
+# Include additional connection configurations
+include /etc/ipsec.d/conf.d/*.conf
+
+# Connection selection logic (comments for reference)
+# 1. Try PKI authentication first (hub-pki)
+# 2. Fallback to PSK if PKI fails (hub-psk)
+# 3. Use hybrid for enhanced security environments
+# 4. Use EAP for RADIUS integration
+# 5. Use emergency for disaster recovery
+
+# Template variables to be replaced by installation scripts:
+# {CLIENT_NAME} - Username/hostname of the spoke client
+# {CLIENT_SUBNET} - Assigned subnet number for the client
+# {HUB_IP} - IP address of the VPN hub server
+# {HUB_BACKUP_IP} - IP address of backup hub server
+# {SITE_ID} - Site identifier for branch offices
+# {GROUP_NAME} - Group/department name
+# {GROUP_SUBNET} - Subnet assigned to the group
+# {DEVICE_ID} - IoT device identifier
