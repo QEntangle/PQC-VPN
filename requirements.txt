@@ -1,198 +1,136 @@
-# Core PQC-VPN Requirements
-# Essential dependencies for actual functionality
+# PQC-VPN v1.0.0 Requirements
+# Enterprise Post-Quantum Cryptography VPN Dependencies
 
-# Core Framework
+# Core Web Framework
 Flask==3.0.0
 Flask-SQLAlchemy==3.1.1
 Flask-Login==0.6.3
+Flask-RESTX==1.3.0
 Werkzeug==3.0.1
-
-# Database
-SQLAlchemy==2.0.23
-psycopg2-binary==2.9.9
-redis==5.0.1
-
-# Cryptography and PQC
-cryptography>=41.0.0
-pycryptodome==3.19.0
-paramiko==3.3.1
-
-# OpenSSL and OQS integration
-cffi==1.16.0
-pycparser==2.21
-
-# Network and VPN
-netifaces==0.11.0
-pyroute2==0.7.12
-netaddr==0.10.1
-
-# System Monitoring
-psutil==5.9.6
-py-cpuinfo==9.0.0
-distro==1.8.0
-
-# Web and API
-requests==2.31.0
-urllib3==2.1.0
 Jinja2==3.1.2
 MarkupSafe==2.1.3
 
-# Monitoring and Metrics
+# Database Support
+SQLAlchemy==2.0.23
+psycopg2-binary==2.9.9
+redis==5.0.1
+asyncpg==0.29.0
+aiosqlite==0.19.0
+pymongo==4.6.1
+
+# Post-Quantum Cryptography
+cryptography>=41.0.0
+pycryptodome==3.19.0
+liboqs-python==0.8.0
+cffi==1.16.0
+pycparser==2.21
+pyOpenSSL==23.3.0
+certifi==2023.11.17
+
+# Network and VPN Core
+netifaces==0.11.0
+pyroute2==0.7.12
+netaddr==0.10.1
+paramiko==3.3.1
+dnspython==2.4.2
+ping3==4.0.4
+python-nmap==0.7.1
+
+# System Monitoring and Performance
+psutil==5.9.6
+py-cpuinfo==9.0.0
+distro==1.8.0
 prometheus-client==0.19.0
+rich==13.7.0
+pandas==2.1.4
+numpy==1.26.2
 
 # Configuration Management
 PyYAML==6.0.1
 toml==0.10.2
 configparser==6.0.0
+pydantic==2.5.1
+cerberus==1.3.5
+jsonschema==4.20.0
+hydra-core==1.3.2
+omegaconf==2.3.0
 
 # Logging and Debugging
 structlog==23.2.0
+loguru==0.7.2
 colorama==0.4.6
 
-# Certificate Management
-pyOpenSSL==23.3.0
-certifi==2023.11.17
+# Web and API
+requests==2.31.0
+urllib3==2.1.0
+aiohttp==3.9.1
+fastapi==0.104.1
+uvicorn==0.24.0
+marshmallow==3.20.1
 
-# High Availability
+# Container and Orchestration
 kubernetes==28.1.0
 docker==6.1.3
+docker-compose==1.29.2
+podman-py==4.7.0
 
-# Performance and Optimization
+# High Performance and Async
 uvloop==0.19.0
+gevent==23.9.1
+greenlet==3.0.1
+aiofiles==23.2.1
 cachetools==5.3.2
+orjson==3.9.10
 
-# Testing and Development
+# Security and Authentication
+bcrypt==4.1.2
+passlib==1.7.4
+keyring==24.3.0
+
+# Process and Task Management
+schedule==1.2.1
+croniter==2.0.1
+supervisor==4.2.5
+gunicorn==21.2.0
+watchdog==3.0.0
+
+# Real-time Communication
+websockets==12.0
+
+# Enterprise Integration
+pika==1.3.2
+consul-python==1.1.0
+geoip2==4.7.0
+
+# Development and Testing
 pytest==7.4.3
 pytest-cov==4.1.0
 black==23.11.0
 flake8==6.1.0
 mypy==1.7.1
-
-# Security
-bcrypt==4.1.2
-passlib==1.7.4
-
-# Time and Scheduling
-schedule==1.2.1
-croniter==2.0.1
-
-# Data Processing
-pandas==2.1.4
-numpy==1.26.2
-
-# Windows Support
-pywin32==306; sys_platform == "win32"
-wmi==1.5.1; sys_platform == "win32"
-
-# Linux Support
-systemd-python==235; sys_platform == "linux"
-
-# Development Tools
-ipython==8.17.2
-
-# Documentation
-sphinx==7.2.6
-sphinx-rtd-theme==1.3.0
-
-# API Documentation
-flask-restx==1.3.0
-marshmallow==3.20.1
-
-# Async Support
-aiofiles==23.2.1
-aiohttp==3.9.1
-
-# Container Support
-docker-compose==1.29.2
-
-# Real-time Communication
-websockets==12.0
-
-# Configuration Validation
-cerberus==1.3.5
-jsonschema==4.20.0
-
-# Process Management
-supervisor==4.2.5
-gunicorn==21.2.0
-
-# File Processing
-watchdog==3.0.0
-
-# Network Testing
-ping3==4.0.4
-
-# Advanced Logging
-loguru==0.7.2
-
-# Configuration Secrets Management
-keyring==24.3.0
-
-# Network Discovery
-python-nmap==0.7.1
-
-# Advanced Cryptographic Protocols
-liboqs-python==0.8.0
-
-# Advanced Configuration
-hydra-core==1.3.2
-omegaconf==2.3.0
-
-# Geographic IP Information
-geoip2==4.7.0
-
-# Memory Management
-pympler==0.9.1
-
-# Advanced JSON Processing
-orjson==3.9.10
-
-# Async Database
-asyncpg==0.29.0
-aiosqlite==0.19.0
-
-# Advanced Validation
-pydantic==2.5.1
-
-# Performance Testing
-locust==2.17.0
-
-# Advanced Notification
-plyer==2.1.0
-
-# Advanced Security Scanning
 bandit==1.7.5
 safety==2.3.4
-
-# Performance Optimization
-Cython==3.0.6
-
-# Advanced Networking
-dnspython==2.4.2
-
-# Advanced Performance
-fastapi==0.104.1
-uvicorn==0.24.0
-
-# Database Drivers
-pymongo==4.6.1
-
-# Enterprise Message Queue
-pika==1.3.2
-
-# Advanced Configuration
-consul-python==1.1.0
-
-# Container Runtime
-podman-py==4.7.0
-
-# Final optimizations for production
-gevent==23.9.1
-greenlet==3.0.1
+locust==2.17.0
 
 # Command Line Interface
 click>=8.0.0
 tabulate>=0.9.0
 
-# Additional monitoring tools (actually used in connection-monitor.py)
-rich==13.7.0
+# Documentation
+sphinx==7.2.6
+sphinx-rtd-theme==1.3.0
+
+# Memory and Performance Analysis
+pympler==0.9.1
+Cython==3.0.6
+
+# Notifications
+plyer==2.1.0
+
+# Platform Specific Dependencies
+pywin32==306; sys_platform == "win32"
+wmi==1.5.1; sys_platform == "win32"
+systemd-python==235; sys_platform == "linux"
+
+# Development Tools
+ipython==8.17.2
