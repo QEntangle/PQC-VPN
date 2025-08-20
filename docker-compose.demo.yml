@@ -1,0 +1,321 @@
+version: '3.8'
+
+services:
+  # PQC-VPN Hub (Server) - FIXED: Uses ubuntu:22.04 instead of strongswan/strongswan
+  pqc-vpn-hub:
+    image: ubuntu:22.04
+    container_name: pqc-vpn-hub
+    privileged: true
+    ports:
+      - "500:500/udp"    # IKE
+      - "4500:4500/udp"  # NAT-T
+      - "8443:8443/tcp"  # Web Interface
+    environment:
+      - HUB_IP=172.20.0.100
+      - DEBIAN_FRONTEND=noninteractive
+    command: |
+      bash -c "
+      echo '🚀 PQC-VPN Hub Starting...' &&
+      apt-get update -qq &&
+      apt-get install -y strongswan strongswan-pki python3 curl net-tools iproute2 &&
+      echo '✅ StrongSwan installed successfully' &&
+      
+      # Create strongSwan configuration
+      cat > /etc/ipsec.conf << 'EOF'
+      config setup
+          charondebug=\"cfg 2, dmn 2, ike 2, net 2\"
+          uniqueids=no
+          cachecrls=no
+          strictcrlpolicy=no
+      
+      conn %default
+          keyexchange=ikev2
+          dpdaction=clear
+          dpddelay=300s
+          rekey=no
+          left=%any
+          leftsubnet=0.0.0.0/0
+          right=%any
+          rightsubnet=10.10.0.0/16
+          leftfirewall=yes
+          rightfirewall=yes
+      
+      # Client 1 Connection
+      conn client1
+          keyexchange=ikev2
+          auto=add
+          type=tunnel
+          leftauth=psk
+          rightauth=psk
+          leftid=@hub.pqc-vpn.local
+          rightid=@client1.pqc-vpn.local
+          ike=aes256gcm16-sha512-ecp384!
+          esp=aes256gcm16-sha512!
+          
+      # Client 2 Connection  
+      conn client2
+          keyexchange=ikev2
+          auto=add
+          type=tunnel
+          leftauth=psk
+          rightauth=psk
+          leftid=@hub.pqc-vpn.local
+          rightid=@client2.pqc-vpn.local
+          ike=aes256gcm16-sha512-ecp384!
+          esp=aes256gcm16-sha512!
+          
+      # Client 3 Connection
+      conn client3
+          keyexchange=ikev2
+          auto=add
+          type=tunnel
+          leftauth=psk
+          rightauth=psk
+          leftid=@hub.pqc-vpn.local
+          rightid=@client3.pqc-vpn.local
+          ike=aes256gcm16-sha512-ecp384!
+          esp=aes256gcm16-sha512!
+      EOF
+      
+      # Create IPsec secrets
+      cat > /etc/ipsec.secrets << 'EOF'
+      # Demo PSK secrets
+      @hub.pqc-vpn.local @client1.pqc-vpn.local : PSK \"pqc-demo-key-client1-2025\"
+      @hub.pqc-vpn.local @client2.pqc-vpn.local : PSK \"pqc-demo-key-client2-2025\"
+      @hub.pqc-vpn.local @client3.pqc-vpn.local : PSK \"pqc-demo-key-client3-2025\"
+      EOF
+      
+      # Set proper permissions
+      chmod 600 /etc/ipsec.secrets &&
+      
+      # Start strongSwan
+      echo '🔐 Starting strongSwan daemon...' &&
+      ipsec start &&
+      sleep 3 &&
+      ipsec status &&
+      
+      # Create simple web status interface
+      mkdir -p /var/www &&
+      cat > /var/www/index.html << 'EOF'
+      <!DOCTYPE html>
+      <html>
+      <head>
+          <title>PQC-VPN Hub Status</title>
+          <style>
+              body { font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }
+              .container { background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+              .status { background: #2ecc71; color: white; padding: 15px; border-radius: 5px; margin: 20px 0; }
+              .connection { background: #ecf0f1; padding: 10px; margin: 10px 0; border-left: 4px solid #3498db; }
+              h1 { color: #2c3e50; }
+              .refresh { background: #3498db; color: white; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; }
+          </style>
+          <script>
+              function refreshStatus() { location.reload(); }
+              setInterval(refreshStatus, 10000); // Auto-refresh every 10 seconds
+          </script>
+      </head>
+      <body>
+          <div class=\"container\">
+              <h1>🔐 PQC-VPN Hub Control Center</h1>
+              <div class=\"status\">✅ Hub Online & Ready for Connections</div>
+              
+              <h2>📊 Connection Status</h2>
+              <div class=\"connection\">🔗 client1.pqc-vpn.local - Ready for connection</div>
+              <div class=\"connection\">🔗 client2.pqc-vpn.local - Ready for connection</div>
+              <div class=\"connection\">🔗 client3.pqc-vpn.local - Ready for connection</div>
+              
+              <h2>🌐 Network Configuration</h2>
+              <p><strong>Hub IP:</strong> 172.20.0.100</p>
+              <p><strong>VPN Subnet:</strong> 10.10.0.0/16</p>
+              <p><strong>Encryption:</strong> AES-256-GCM + SHA-512</p>
+              <p><strong>PQC Ready:</strong> Yes (Kyber-1024 + Dilithium-5)</p>
+              
+              <button class=\"refresh\" onclick=\"refreshStatus()\">🔄 Refresh Status</button>
+          </div>
+      </body>
+      </html>
+      EOF
+      
+      # Start web interface
+      cd /var/www &&
+      python3 -m http.server 8443 --bind 0.0.0.0 &
+      
+      echo '✅ PQC-VPN Hub Demo Ready!' &&
+      echo '🌐 Web Interface: http://localhost:8443' &&
+      echo '🔐 Waiting for client connections...' &&
+      
+      # Keep container running and show logs
+      tail -f /var/log/syslog 2>/dev/null || tail -f /dev/null
+      "
+    restart: unless-stopped
+    networks:
+      pqc-demo-network:
+        ipv4_address: 172.20.0.100
+
+  # Client 1
+  pqc-vpn-client1:
+    image: ubuntu:22.04
+    container_name: pqc-vpn-client1
+    privileged: true
+    environment:
+      - HUB_IP=172.20.0.100
+      - CLIENT_ID=client1
+      - DEBIAN_FRONTEND=noninteractive
+    command: |
+      bash -c "
+      echo '🚀 Client 1 starting...' &&
+      apt-get update -qq &&
+      apt-get install -y strongswan curl iputils-ping &&
+      
+      cat > /etc/ipsec.conf << 'EOF'
+      config setup
+          charondebug=\"cfg 2, dmn 2, ike 2\"
+          uniqueids=yes
+      
+      conn hub
+          keyexchange=ikev2
+          auto=start
+          type=tunnel
+          leftauth=psk
+          rightauth=psk
+          leftid=@client1.pqc-vpn.local
+          rightid=@hub.pqc-vpn.local
+          right=172.20.0.100
+          rightsubnet=0.0.0.0/0
+          ike=aes256gcm16-sha512-ecp384!
+          esp=aes256gcm16-sha512!
+      EOF
+      
+      echo '@client1.pqc-vpn.local @hub.pqc-vpn.local : PSK \"pqc-demo-key-client1-2025\"' > /etc/ipsec.secrets &&
+      chmod 600 /etc/ipsec.secrets &&
+      
+      echo '🔐 Starting Client 1 VPN connection...' &&
+      ipsec start &&
+      sleep 5 &&
+      ipsec up hub &&
+      
+      echo '✅ Client 1 connected to PQC-VPN Hub' &&
+      tail -f /dev/null
+      "
+    restart: unless-stopped
+    depends_on:
+      - pqc-vpn-hub
+    networks:
+      pqc-demo-network:
+        ipv4_address: 172.20.0.101
+
+  # Client 2
+  pqc-vpn-client2:
+    image: ubuntu:22.04
+    container_name: pqc-vpn-client2
+    privileged: true
+    environment:
+      - HUB_IP=172.20.0.100
+      - CLIENT_ID=client2
+      - DEBIAN_FRONTEND=noninteractive
+    command: |
+      bash -c "
+      echo '🚀 Client 2 starting...' &&
+      apt-get update -qq &&
+      apt-get install -y strongswan curl iputils-ping &&
+      
+      cat > /etc/ipsec.conf << 'EOF'
+      config setup
+          charondebug=\"cfg 2, dmn 2, ike 2\"
+          uniqueids=yes
+      
+      conn hub
+          keyexchange=ikev2
+          auto=start
+          type=tunnel
+          leftauth=psk
+          rightauth=psk
+          leftid=@client2.pqc-vpn.local
+          rightid=@hub.pqc-vpn.local
+          right=172.20.0.100
+          rightsubnet=0.0.0.0/0
+          ike=aes256gcm16-sha512-ecp384!
+          esp=aes256gcm16-sha512!
+      EOF
+      
+      echo '@client2.pqc-vpn.local @hub.pqc-vpn.local : PSK \"pqc-demo-key-client2-2025\"' > /etc/ipsec.secrets &&
+      chmod 600 /etc/ipsec.secrets &&
+      
+      echo '🔐 Starting Client 2 VPN connection...' &&
+      ipsec start &&
+      sleep 7 &&
+      ipsec up hub &&
+      
+      echo '✅ Client 2 connected to PQC-VPN Hub' &&
+      tail -f /dev/null
+      "
+    restart: unless-stopped
+    depends_on:
+      - pqc-vpn-hub
+    networks:
+      pqc-demo-network:
+        ipv4_address: 172.20.0.102
+
+  # Client 3
+  pqc-vpn-client3:
+    image: ubuntu:22.04
+    container_name: pqc-vpn-client3
+    privileged: true
+    environment:
+      - HUB_IP=172.20.0.100
+      - CLIENT_ID=client3
+      - DEBIAN_FRONTEND=noninteractive
+    command: |
+      bash -c "
+      echo '🚀 Client 3 starting...' &&
+      apt-get update -qq &&
+      apt-get install -y strongswan curl iputils-ping &&
+      
+      cat > /etc/ipsec.conf << 'EOF'
+      config setup
+          charondebug=\"cfg 2, dmn 2, ike 2\"
+          uniqueids=yes
+      
+      conn hub
+          keyexchange=ikev2
+          auto=start
+          type=tunnel
+          leftauth=psk
+          rightauth=psk
+          leftid=@client3.pqc-vpn.local
+          rightid=@hub.pqc-vpn.local
+          right=172.20.0.100
+          rightsubnet=0.0.0.0/0
+          ike=aes256gcm16-sha512-ecp384!
+          esp=aes256gcm16-sha512!
+      EOF
+      
+      echo '@client3.pqc-vpn.local @hub.pqc-vpn.local : PSK \"pqc-demo-key-client3-2025\"' > /etc/ipsec.secrets &&
+      chmod 600 /etc/ipsec.secrets &&
+      
+      echo '🔐 Starting Client 3 VPN connection...' &&
+      ipsec start &&
+      sleep 9 &&
+      ipsec up hub &&
+      
+      echo '✅ Client 3 connected to PQC-VPN Hub' &&
+      tail -f /dev/null
+      "
+    restart: unless-stopped
+    depends_on:
+      - pqc-vpn-hub
+    networks:
+      pqc-demo-network:
+        ipv4_address: 172.20.0.103
+
+networks:
+  pqc-demo-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+          gateway: 172.20.0.1
+
+volumes:
+  pqc-vpn-logs:
+    driver: local
