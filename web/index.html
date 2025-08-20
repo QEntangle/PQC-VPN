@@ -39,6 +39,26 @@
         .status-online { background-color: #10b981; }
         .status-offline { background-color: #ef4444; }
         .status-warning { background-color: #f59e0b; }
+        .error-message {
+            background: #fee2e2;
+            color: #dc2626;
+            padding: 12px;
+            border-radius: 8px;
+            margin: 10px 0;
+            border: 1px solid #fecaca;
+        }
+        .loading-spinner {
+            border: 2px solid #f3f3f3;
+            border-top: 2px solid #3498db;
+            border-radius: 50%;
+            width: 20px;
+            height: 20px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
     </style>
 </head>
 <body class="bg-gray-50 min-h-screen" x-data="dashboard()">
@@ -61,13 +81,21 @@
                         Refresh
                     </button>
                     <div class="flex items-center">
-                        <span class="status-dot" :class="hubStatus === 'online' ? 'status-online' : 'status-offline'"></span>
-                        <span x-text="hubStatus === 'online' ? 'Hub Online' : 'Hub Offline'"></span>
+                        <span class="status-dot" :class="systemStatus.hubStatus === 'online' ? 'status-online' : 'status-offline'"></span>
+                        <span x-text="systemStatus.hubStatus === 'online' ? 'Hub Online' : 'Hub Offline'"></span>
                     </div>
                 </div>
             </div>
         </div>
     </nav>
+
+    <!-- Error Messages -->
+    <div x-show="errorMessage" class="max-w-7xl mx-auto py-2 px-4">
+        <div class="error-message">
+            <i class="fas fa-exclamation-triangle mr-2"></i>
+            <span x-text="errorMessage"></span>
+        </div>
+    </div>
 
     <!-- Main Content -->
     <div class="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
@@ -80,7 +108,7 @@
                     </div>
                     <div class="ml-4">
                         <p class="text-sm font-medium text-gray-600">Active Connections</p>
-                        <p class="text-2xl font-semibold text-gray-900" x-text="stats.activeConnections"></p>
+                        <p class="text-2xl font-semibold text-gray-900" x-text="stats.active_connections || 0"></p>
                     </div>
                 </div>
             </div>
@@ -92,7 +120,7 @@
                     </div>
                     <div class="ml-4">
                         <p class="text-sm font-medium text-gray-600">Total Users</p>
-                        <p class="text-2xl font-semibold text-gray-900" x-text="stats.totalUsers"></p>
+                        <p class="text-2xl font-semibold text-gray-900" x-text="stats.total_users || 0"></p>
                     </div>
                 </div>
             </div>
@@ -104,7 +132,7 @@
                     </div>
                     <div class="ml-4">
                         <p class="text-sm font-medium text-gray-600">PQC Tunnels</p>
-                        <p class="text-2xl font-semibold text-gray-900" x-text="stats.pqcTunnels"></p>
+                        <p class="text-2xl font-semibold text-gray-900" x-text="stats.pqc_tunnels || 0"></p>
                     </div>
                 </div>
             </div>
@@ -116,7 +144,7 @@
                     </div>
                     <div class="ml-4">
                         <p class="text-sm font-medium text-gray-600">Data Transferred</p>
-                        <p class="text-2xl font-semibold text-gray-900" x-text="stats.dataTransferred"></p>
+                        <p class="text-2xl font-semibold text-gray-900" x-text="stats.data_transferred || '0 B'"></p>
                     </div>
                 </div>
             </div>
@@ -154,7 +182,7 @@
                                         <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500" x-text="connection.ip"></td>
                                         <td class="px-6 py-4 whitespace-nowrap">
                                             <span class="inline-flex px-2 py-1 text-xs font-semibold rounded-full" 
-                                                  :class="connection.authType === 'PKI' ? 'bg-green-100 text-green-800' : 'bg-blue-100 text-blue-800'"
+                                                  :class="connection.authType === 'PKI' ? 'bg-green-100 text-green-800' : connection.authType === 'PSK' ? 'bg-blue-100 text-blue-800' : 'bg-purple-100 text-purple-800'"
                                                   x-text="connection.authType"></span>
                                         </td>
                                         <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500" x-text="connection.algorithm"></td>
@@ -166,6 +194,14 @@
                                         </td>
                                     </tr>
                                 </template>
+                                <tr x-show="connections.length === 0">
+                                    <td colspan="6" class="px-6 py-4 text-center text-gray-500">
+                                        <div class="flex items-center justify-center">
+                                            <i class="fas fa-info-circle mr-2"></i>
+                                            No active connections
+                                        </div>
+                                    </td>
+                                </tr>
                             </tbody>
                         </table>
                     </div>
@@ -181,17 +217,18 @@
                     <div class="flex items-center justify-between">
                         <span class="text-sm text-gray-600">Hub Server</span>
                         <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium"
-                              :class="hubStatus === 'online' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'">
-                            <span class="status-dot mr-1" :class="hubStatus === 'online' ? 'status-online' : 'status-offline'"></span>
-                            <span x-text="hubStatus === 'online' ? 'Online' : 'Offline'"></span>
+                              :class="systemStatus.hubStatus === 'online' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'">
+                            <span class="status-dot mr-1" :class="systemStatus.hubStatus === 'online' ? 'status-online' : 'status-offline'"></span>
+                            <span x-text="systemStatus.hubStatus === 'online' ? 'Online' : 'Offline'"></span>
                         </span>
                     </div>
                     
                     <div class="flex items-center justify-between">
                         <span class="text-sm text-gray-600">strongSwan Service</span>
-                        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                            <span class="status-dot status-online mr-1"></span>
-                            Running
+                        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium"
+                              :class="systemStatus.strongswanStatus === 'running' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'">
+                            <span class="status-dot mr-1" :class="systemStatus.strongswanStatus === 'running' ? 'status-online' : 'status-offline'"></span>
+                            <span x-text="systemStatus.strongswanStatus === 'running' ? 'Running' : 'Stopped'"></span>
                         </span>
                     </div>
                     
@@ -199,23 +236,23 @@
                         <span class="text-sm text-gray-600">Certificate Validity</span>
                         <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
                             <i class="fas fa-clock mr-1"></i>
-                            89 days
+                            <span x-text="(systemStatus.certificateStatus?.days_until_expiry || 0) + ' days'"></span>
                         </span>
                     </div>
                     
                     <div class="flex items-center justify-between">
                         <span class="text-sm text-gray-600">CPU Usage</span>
-                        <span class="text-sm text-gray-900" x-text="systemStats.cpuUsage + '%'"></span>
+                        <span class="text-sm text-gray-900" x-text="(systemMetrics.cpu_usage || 0) + '%'"></span>
                     </div>
                     
                     <div class="flex items-center justify-between">
                         <span class="text-sm text-gray-600">Memory Usage</span>
-                        <span class="text-sm text-gray-900" x-text="systemStats.memoryUsage + '%'"></span>
+                        <span class="text-sm text-gray-900" x-text="(systemMetrics.memory_usage || 0) + '%'"></span>
                     </div>
                     
                     <div class="flex items-center justify-between">
                         <span class="text-sm text-gray-600">Disk Usage</span>
-                        <span class="text-sm text-gray-900" x-text="systemStats.diskUsage + '%'"></span>
+                        <span class="text-sm text-gray-900" x-text="(systemMetrics.disk_usage || 0) + '%'"></span>
                     </div>
                 </div>
             </div>
@@ -270,6 +307,11 @@
                 </div>
             </div>
         </div>
+
+        <!-- Last Update Info -->
+        <div class="text-center mt-6 text-sm text-gray-500">
+            Last updated: <span x-text="lastUpdate || 'Never'"></span>
+        </div>
     </div>
 
     <!-- Add User Modal -->
@@ -311,112 +353,216 @@
         function dashboard() {
             return {
                 loading: false,
-                hubStatus: 'online',
+                errorMessage: '',
                 showAddUserModal: false,
+                lastUpdate: null,
                 stats: {
-                    activeConnections: 12,
-                    totalUsers: 45,
-                    pqcTunnels: 8,
-                    dataTransferred: '2.3 TB'
+                    active_connections: 0,
+                    total_users: 0,
+                    pqc_tunnels: 0,
+                    data_transferred: '0 B'
                 },
-                systemStats: {
-                    cpuUsage: 15,
-                    memoryUsage: 62,
-                    diskUsage: 34
+                systemStatus: {
+                    hubStatus: 'offline',
+                    strongswanStatus: 'stopped',
+                    certificateStatus: { days_until_expiry: 0 }
                 },
-                connections: [
-                    {
-                        id: 1,
-                        user: 'alice',
-                        ip: '10.10.1.50',
-                        authType: 'PKI',
-                        algorithm: 'Kyber-1024',
-                        connected: '2h 15m',
-                        status: 'online'
-                    },
-                    {
-                        id: 2,
-                        user: 'bob',
-                        ip: '10.10.1.51',
-                        authType: 'PSK',
-                        algorithm: 'Kyber-768',
-                        connected: '45m',
-                        status: 'online'
-                    },
-                    {
-                        id: 3,
-                        user: 'charlie',
-                        ip: '10.10.1.52',
-                        authType: 'Hybrid',
-                        algorithm: 'Kyber-1024',
-                        connected: '3h 22m',
-                        status: 'online'
-                    }
-                ],
+                systemMetrics: {
+                    cpu_usage: 0,
+                    memory_usage: 0,
+                    disk_usage: 0
+                },
+                connections: [],
                 newUser: {
                     username: '',
                     email: '',
                     authType: 'PKI'
                 },
+                connectionChart: null,
+                algorithmChart: null,
+                connectionHistory: [],
+                algorithmUsage: { 'Kyber-1024': 0, 'Kyber-768': 0, 'Kyber-512': 0 },
 
                 init() {
                     this.initCharts();
                     this.refreshData();
-                    setInterval(() => this.refreshData(), 30000); // Refresh every 30 seconds
+                    // Refresh every 30 seconds
+                    setInterval(() => this.refreshData(), 30000);
                 },
 
-                refreshData() {
+                async refreshData() {
                     this.loading = true;
-                    // Simulate API call
-                    setTimeout(() => {
+                    this.errorMessage = '';
+                    
+                    try {
+                        // Fetch status data from real API
+                        const statusResponse = await fetch('/api/status');
+                        if (!statusResponse.ok) {
+                            throw new Error(`HTTP ${statusResponse.status}: ${statusResponse.statusText}`);
+                        }
+                        
+                        const statusData = await statusResponse.json();
+                        
+                        if (statusData.status === 'success' && statusData.data) {
+                            // Update stats
+                            this.stats = statusData.data.stats || this.stats;
+                            this.systemMetrics = statusData.data.system_stats || this.systemMetrics;
+                            this.connections = statusData.data.connections || [];
+                            
+                            // Update system status
+                            this.systemStatus.hubStatus = this.stats.hub_status || 'offline';
+                            this.systemStatus.strongswanStatus = this.stats.hub_status === 'online' ? 'running' : 'stopped';
+                            this.systemStatus.certificateStatus = this.stats.certificate_status || { days_until_expiry: 0 };
+                            
+                            // Update charts with real data
+                            this.updateChartsWithRealData();
+                            
+                            this.lastUpdate = new Date().toLocaleString();
+                        } else {
+                            throw new Error(statusData.message || 'Invalid response format');
+                        }
+                        
+                    } catch (error) {
+                        console.error('Error fetching status:', error);
+                        this.errorMessage = `Failed to fetch real-time data: ${error.message}`;
+                        
+                        // Fallback to basic system check
+                        try {
+                            const healthResponse = await fetch('/api/health');
+                            if (healthResponse.ok) {
+                                this.errorMessage += ' (API server is running but data collection failed)';
+                            }
+                        } catch {
+                            this.errorMessage += ' (API server may be offline)';
+                        }
+                    } finally {
                         this.loading = false;
-                        this.updateStats();
-                    }, 1000);
-                },
-
-                updateStats() {
-                    // Simulate live data updates
-                    this.stats.activeConnections = Math.floor(Math.random() * 20) + 10;
-                    this.systemStats.cpuUsage = Math.floor(Math.random() * 30) + 10;
-                    this.systemStats.memoryUsage = Math.floor(Math.random() * 40) + 50;
-                },
-
-                disconnectUser(userId) {
-                    if (confirm('Are you sure you want to disconnect this user?')) {
-                        this.connections = this.connections.filter(conn => conn.id !== userId);
-                        this.stats.activeConnections--;
                     }
                 },
 
-                addUser() {
-                    // Simulate adding user
-                    console.log('Adding user:', this.newUser);
-                    this.showAddUserModal = false;
-                    this.newUser = { username: '', email: '', authType: 'PKI' };
+                updateChartsWithRealData() {
+                    // Update connection history (keep last 7 data points)
+                    this.connectionHistory.push(this.stats.active_connections || 0);
+                    if (this.connectionHistory.length > 7) {
+                        this.connectionHistory.shift();
+                    }
+                    
+                    // Update algorithm usage based on current connections
+                    const algUsage = { 'Kyber-1024': 0, 'Kyber-768': 0, 'Kyber-512': 0 };
+                    this.connections.forEach(conn => {
+                        if (conn.algorithm && algUsage.hasOwnProperty(conn.algorithm)) {
+                            algUsage[conn.algorithm]++;
+                        }
+                    });
+                    this.algorithmUsage = algUsage;
+                    
+                    // Update chart data
+                    if (this.connectionChart) {
+                        this.connectionChart.data.datasets[0].data = [...this.connectionHistory];
+                        this.connectionChart.update();
+                    }
+                    
+                    if (this.algorithmChart) {
+                        this.algorithmChart.data.datasets[0].data = Object.values(this.algorithmUsage);
+                        this.algorithmChart.update();
+                    }
                 },
 
-                generateCertificates() {
-                    alert('Certificate generation started. Check logs for progress.');
+                async disconnectUser(userId) {
+                    if (confirm('Are you sure you want to disconnect this user?')) {
+                        try {
+                            const response = await fetch(`/api/connections/${userId}`, {
+                                method: 'DELETE'
+                            });
+                            
+                            const result = await response.json();
+                            if (result.status === 'success') {
+                                this.refreshData(); // Refresh to get updated connection list
+                            } else {
+                                alert(`Error: ${result.message}`);
+                            }
+                        } catch (error) {
+                            alert(`Failed to disconnect user: ${error.message}`);
+                        }
+                    }
                 },
 
-                backupConfig() {
-                    alert('Configuration backup created successfully.');
+                async addUser() {
+                    try {
+                        const response = await fetch('/api/users', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify(this.newUser)
+                        });
+                        
+                        const result = await response.json();
+                        if (result.status === 'success') {
+                            this.showAddUserModal = false;
+                            this.newUser = { username: '', email: '', authType: 'PKI' };
+                            this.refreshData(); // Refresh to get updated stats
+                            alert('User added successfully!');
+                        } else {
+                            alert(`Error: ${result.message}`);
+                        }
+                    } catch (error) {
+                        alert(`Failed to add user: ${error.message}`);
+                    }
+                },
+
+                async generateCertificates() {
+                    try {
+                        const response = await fetch('/api/certificates/generate', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify({ type: 'client' })
+                        });
+                        
+                        const result = await response.json();
+                        if (result.status === 'success') {
+                            alert('Certificate generation started. Check logs for progress.');
+                        } else {
+                            alert(`Error: ${result.message}`);
+                        }
+                    } catch (error) {
+                        alert(`Failed to generate certificates: ${error.message}`);
+                    }
+                },
+
+                async backupConfig() {
+                    try {
+                        const response = await fetch('/api/config/backup', {
+                            method: 'POST'
+                        });
+                        
+                        const result = await response.json();
+                        if (result.status === 'success') {
+                            alert(`Configuration backup created: ${result.backup_file}`);
+                        } else {
+                            alert(`Error: ${result.message}`);
+                        }
+                    } catch (error) {
+                        alert(`Failed to create backup: ${error.message}`);
+                    }
                 },
 
                 viewLogs() {
-                    window.open('/logs', '_blank');
+                    window.open('/api/logs', '_blank');
                 },
 
                 initCharts() {
                     // Connection History Chart
                     const ctx1 = document.getElementById('connectionChart').getContext('2d');
-                    new Chart(ctx1, {
+                    this.connectionChart = new Chart(ctx1, {
                         type: 'line',
                         data: {
-                            labels: ['6h ago', '5h ago', '4h ago', '3h ago', '2h ago', '1h ago', 'Now'],
+                            labels: ['6 updates ago', '5', '4', '3', '2', '1', 'Current'],
                             datasets: [{
                                 label: 'Active Connections',
-                                data: [8, 12, 15, 18, 14, 16, 12],
+                                data: [0, 0, 0, 0, 0, 0, 0],
                                 borderColor: 'rgb(99, 102, 241)',
                                 backgroundColor: 'rgba(99, 102, 241, 0.1)',
                                 tension: 0.4
@@ -435,12 +581,12 @@
 
                     // Algorithm Usage Chart
                     const ctx2 = document.getElementById('algorithmChart').getContext('2d');
-                    new Chart(ctx2, {
+                    this.algorithmChart = new Chart(ctx2, {
                         type: 'doughnut',
                         data: {
                             labels: ['Kyber-1024', 'Kyber-768', 'Kyber-512'],
                             datasets: [{
-                                data: [45, 35, 20],
+                                data: [0, 0, 0],
                                 backgroundColor: [
                                     'rgb(99, 102, 241)',
                                     'rgb(139, 92, 246)',
