@@ -1,0 +1,230 @@
+# PQC-VPN Hub - Working Build Version
+# This version builds successfully and can be enhanced later
+FROM ubuntu:22.04
+
+LABEL maintainer="PQC-VPN Project"
+LABEL version="1.0.0-working"
+LABEL description="Post-Quantum Cryptography VPN Hub - Working Build"
+
+# Prevent interactive prompts
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=UTC
+
+WORKDIR /opt/pqc-vpn
+
+# Install essential packages
+RUN apt-get update --fix-missing && \
+    apt-get install -y --no-install-recommends \
+        python3 \
+        python3-pip \
+        python3-venv \
+        strongswan \
+        strongswan-pki \
+        strongswan-starter \
+        curl \
+        wget \
+        vim \
+        net-tools \
+        iptables \
+        iproute2 \
+        iputils-ping \
+        sqlite3 \
+        ca-certificates \
+        openssl \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create necessary directories
+RUN mkdir -p /opt/pqc-vpn/{bin,lib,data,logs,scripts,web,tools} \
+    && mkdir -p /etc/ipsec.d/{certs,private,cacerts,crls} \
+    && mkdir -p /var/log/pqc-vpn \
+    && chmod 700 /etc/ipsec.d/private \
+    && chmod 755 /etc/ipsec.d/{certs,cacerts,crls}
+
+# Create Python virtual environment
+RUN python3 -m venv /opt/pqc-vpn/venv \
+    && /opt/pqc-vpn/venv/bin/pip install --upgrade pip setuptools wheel
+
+# Copy minimal requirements and install
+COPY requirements.minimal.txt /opt/pqc-vpn/
+RUN /opt/pqc-vpn/venv/bin/pip install -r /opt/pqc-vpn/requirements.minimal.txt
+
+# Copy application files
+COPY tools/ /opt/pqc-vpn/tools/
+COPY web/ /opt/pqc-vpn/web/
+COPY scripts/ /opt/pqc-vpn/scripts/
+COPY configs/ /opt/pqc-vpn/configs/
+
+# Make scripts executable
+RUN find /opt/pqc-vpn/scripts/ -name "*.sh" -exec chmod +x {} \; \
+    && find /opt/pqc-vpn/tools/ -name "*.py" -exec chmod +x {} \;
+
+# Create simplified entrypoint script
+RUN cat > /opt/pqc-vpn/scripts/simple-entrypoint.sh << 'EOF'
+#!/bin/bash
+# Simplified PQC-VPN Hub Entrypoint
+
+set -e
+
+# Colors for output
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+NC='\033[0m'
+
+log() {
+    echo -e "${GREEN}[$(date '+%Y-%m-%d %H:%M:%S')]${NC} $*"
+}
+
+error() {
+    echo -e "${RED}[$(date '+%Y-%m-%d %H:%M:%S')] ERROR:${NC} $*"
+}
+
+# Create log directory
+mkdir -p /var/log/pqc-vpn
+
+log "🔐 Starting PQC-VPN Hub (Working Version)"
+
+# Set up basic ipsec configuration
+log "Setting up basic strongSwan configuration..."
+
+# Enable IP forwarding
+echo 1 > /proc/sys/net/ipv4/ip_forward
+
+# Create basic ipsec.conf
+cat > /etc/ipsec.conf << 'EOFCONF'
+config setup
+    charondebug="ike 2, knl 2, cfg 2"
+    strictcrlpolicy=no
+    uniqueids=never
+
+conn %default
+    keyexchange=ikev2
+    dpdaction=restart
+    dpddelay=30s
+    left=%any
+    leftsubnet=0.0.0.0/0
+    right=%any
+    auto=add
+
+conn demo-connection
+    also=%default
+    authby=psk
+    leftid=@pqc-hub
+    rightid=@demo-client
+    ike=aes256-sha256-modp2048!
+    esp=aes256-sha256!
+    auto=start
+EOFCONF
+
+# Create basic ipsec.secrets
+cat > /etc/ipsec.secrets << 'EOFSECRETS'
+# Demo PSK
+@pqc-hub @demo-client : PSK "DemoSharedSecret123!"
+EOFSECRETS
+
+chmod 600 /etc/ipsec.secrets
+
+# Start strongSwan in background
+log "Starting strongSwan..."
+ipsec start --nofork &
+STRONGSWAN_PID=$!
+
+# Start a simple web server for health checks
+log "Starting simple health check server..."
+source /opt/pqc-vpn/venv/bin/activate
+
+# Create a simple health check server
+cat > /tmp/health_server.py << 'EOFHEALTH'
+#!/usr/bin/env python3
+from http.server import HTTPServer, BaseHTTPRequestHandler
+import json
+import subprocess
+import time
+
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == '/health':
+            # Check if strongSwan is running
+            try:
+                result = subprocess.run(['ipsec', 'status'], 
+                                      capture_output=True, text=True, timeout=5)
+                if result.returncode == 0:
+                    status = {"status": "healthy", "strongswan": "running", "timestamp": time.time()}
+                    self.send_response(200)
+                else:
+                    status = {"status": "unhealthy", "strongswan": "stopped", "timestamp": time.time()}
+                    self.send_response(503)
+            except Exception as e:
+                status = {"status": "error", "error": str(e), "timestamp": time.time()}
+                self.send_response(500)
+            
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps(status).encode())
+        
+        elif self.path == '/':
+            self.send_response(200)
+            self.send_header('Content-type', 'text/html')
+            self.end_headers()
+            html = '''
+            <html><head><title>PQC-VPN Hub</title></head>
+            <body>
+                <h1>🔐 PQC-VPN Hub</h1>
+                <p>Status: <strong>Running</strong></p>
+                <p>Version: 1.0.0-working</p>
+                <p><a href="/health">Health Check</a></p>
+            </body></html>
+            '''
+            self.wfile.write(html.encode())
+        else:
+            self.send_error(404)
+
+if __name__ == '__main__':
+    server = HTTPServer(('0.0.0.0', 8443), HealthHandler)
+    print("Health server running on port 8443")
+    server.serve_forever()
+EOFHEALTH
+
+python3 /tmp/health_server.py &
+HEALTH_PID=$!
+
+log "✅ PQC-VPN Hub started successfully"
+log "   - strongSwan PID: $STRONGSWAN_PID"
+log "   - Health server PID: $HEALTH_PID"
+log "   - Web interface: http://localhost:8443"
+
+# Keep container running
+while true; do
+    sleep 30
+    # Check if processes are still running
+    if ! kill -0 $STRONGSWAN_PID 2>/dev/null; then
+        error "strongSwan stopped, restarting..."
+        ipsec start --nofork &
+        STRONGSWAN_PID=$!
+    fi
+    if ! kill -0 $HEALTH_PID 2>/dev/null; then
+        error "Health server stopped, restarting..."
+        python3 /tmp/health_server.py &
+        HEALTH_PID=$!
+    fi
+done
+EOF
+
+RUN chmod +x /opt/pqc-vpn/scripts/simple-entrypoint.sh
+
+# Create symlinks for management tools
+RUN ln -sf /opt/pqc-vpn/tools/pqc-vpn-manager.py /usr/local/bin/pqc-vpn-manager \
+    && ln -sf /usr/sbin/ipsec /usr/local/bin/ipsec
+
+# Set environment variables
+ENV PATH="/opt/pqc-vpn/venv/bin:${PATH}"
+
+# Expose ports
+EXPOSE 500/udp 4500/udp 8443/tcp
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD curl -f http://localhost:8443/health || exit 1
+
+# Start the simplified entrypoint
+ENTRYPOINT ["/opt/pqc-vpn/scripts/simple-entrypoint.sh"]
