@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 Real PQC-VPN Management Dashboard
 Displays actual system data, not simulated information
 """
 
-from flask import Flask, render_template, jsonify, request, redirect, url_for, flash
+from flask import Flask, render_template, jsonify, request, redirect, url_for, flash, Response
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 import sqlite3
@@ -24,13 +25,21 @@ app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', secrets.token_hex(32))
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:////opt/pqc-vpn/data/pqc-vpn.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
+# Ensure UTF-8 encoding
+app.config['JSON_AS_ASCII'] = False
+
 db = SQLAlchemy(app)
 login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login'
 
 # Redis for real-time data
-redis_client = redis.Redis(host='localhost', port=6379, db=0, decode_responses=True)
+try:
+    redis_client = redis.Redis(host='localhost', port=6379, db=0, decode_responses=True)
+    redis_client.ping()  # Test connection
+except:
+    redis_client = None
+    print("Warning: Redis not available, using in-memory storage")
 
 class AdminUser(UserMixin):
     def __init__(self, id):
@@ -172,8 +181,25 @@ class RealPQCVPNManager:
     def add_user(self, username, email, auth_type='pki', psk_key=None):
         """Add a new VPN user"""
         try:
+            # Ensure database directory exists
+            os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+            
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
+            
+            # Create users table if it doesn't exist
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    username TEXT UNIQUE NOT NULL,
+                    email TEXT,
+                    auth_type TEXT DEFAULT 'pki',
+                    psk_key TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    last_login TIMESTAMP,
+                    status TEXT DEFAULT 'active'
+                )
+            ''')
             
             # Generate PSK if needed
             if auth_type in ['psk', 'hybrid'] and not psk_key:
@@ -206,8 +232,12 @@ class RealPQCVPNManager:
             conn.close()
             
             # Read existing secrets file
-            with open('/etc/ipsec.secrets', 'r') as f:
-                lines = f.readlines()
+            secrets_file = '/etc/ipsec.secrets'
+            if os.path.exists(secrets_file):
+                with open(secrets_file, 'r', encoding='utf-8') as f:
+                    lines = f.readlines()
+            else:
+                lines = []
             
             # Keep non-user lines
             new_lines = []
@@ -220,7 +250,7 @@ class RealPQCVPNManager:
                 new_lines.append(f'{username} : PSK "{psk_key}"\n')
             
             # Write updated file
-            with open('/etc/ipsec.secrets', 'w') as f:
+            with open(secrets_file, 'w', encoding='utf-8') as f:
                 f.writelines(new_lines)
             
             # Reload strongSwan
@@ -250,10 +280,11 @@ def login():
         else:
             flash('Invalid credentials')
     
-    return '''
+    login_html = '''
     <!DOCTYPE html>
     <html>
     <head>
+        <meta charset="UTF-8">
         <title>PQC-VPN Admin Login</title>
         <style>
             body { font-family: Arial, sans-serif; background: #f0f2f5; margin: 0; padding: 50px; }
@@ -268,13 +299,7 @@ def login():
     <body>
         <div class="login-container">
             <h1>🔐 PQC-VPN Admin</h1>
-            {% with messages = get_flashed_messages() %}
-                {% if messages %}
-                    {% for message in messages %}
-                        <div class="alert">{{ message }}</div>
-                    {% endfor %}
-                {% endif %}
-            {% endwith %}
+            ''' + (''.join(f'<div class="alert">{message}</div>' for message in []) if 'get_flashed_messages' not in locals() else '') + '''
             <form method="POST">
                 <input type="text" name="username" placeholder="Username" required>
                 <input type="password" name="password" placeholder="Password" required>
@@ -287,17 +312,19 @@ def login():
     </body>
     </html>
     '''
+    
+    return Response(login_html, mimetype='text/html; charset=utf-8')
 
 @app.route('/dashboard')
 @login_required
 def dashboard():
-    return '''
+    dashboard_html = '''
     <!DOCTYPE html>
     <html>
     <head>
-        <title>Real PQC-VPN Dashboard</title>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Real PQC-VPN Dashboard</title>
         <style>
             * { margin: 0; padding: 0; box-sizing: border-box; }
             body { 
@@ -342,7 +369,7 @@ def dashboard():
                 align-items: center;
             }
             
-            .card h3 .emoji { font-size: 1.5em; margin-right: 10px; }
+            .card h3 .icon { font-size: 1.5em; margin-right: 10px; }
             
             .metric { 
                 display: flex; 
@@ -454,22 +481,22 @@ def dashboard():
     </head>
     <body>
         <div class="header">
-            <h1>🔐 Real PQC-VPN Enterprise Dashboard</h1>
+            <h1><span class="icon">🔐</span> Real PQC-VPN Enterprise Dashboard</h1>
             <p>Post-Quantum Cryptography VPN - Live System Monitor</p>
         </div>
         
         <div class="container">
             <div class="nav-buttons">
-                <a href="/dashboard" class="nav-button">🏠 Dashboard</a>
-                <a href="/users" class="nav-button">👥 User Management</a>
-                <a href="/certificates" class="nav-button">🔐 Certificates</a>
-                <a href="/system" class="nav-button">🖥️ System Status</a>
-                <a href="/logout" class="nav-button">🚪 Logout</a>
+                <a href="/dashboard" class="nav-button"><span class="icon">🏠</span> Dashboard</a>
+                <a href="/users" class="nav-button"><span class="icon">👥</span> User Management</a>
+                <a href="/certificates" class="nav-button"><span class="icon">🔐</span> Certificates</a>
+                <a href="/system" class="nav-button"><span class="icon">🖥️</span> System Status</a>
+                <a href="/logout" class="nav-button"><span class="icon">🚪</span> Logout</a>
             </div>
             
             <div class="status-grid">
                 <div class="card">
-                    <h3><span class="emoji">🔐</span>VPN Status</h3>
+                    <h3><span class="icon">🔐</span>VPN Status</h3>
                     <div id="vpn-status">Loading...</div>
                     <div class="metric">
                         <span class="metric-label">Active Connections:</span>
@@ -482,7 +509,7 @@ def dashboard():
                 </div>
                 
                 <div class="card">
-                    <h3><span class="emoji">📊</span>System Performance</h3>
+                    <h3><span class="icon">📊</span>System Performance</h3>
                     <div class="metric">
                         <span class="metric-label">CPU Usage:</span>
                         <span class="metric-value" id="cpu-usage">-</span>
@@ -500,7 +527,7 @@ def dashboard():
                 </div>
                 
                 <div class="card">
-                    <h3><span class="emoji">🌐</span>Network Statistics</h3>
+                    <h3><span class="icon">🌐</span>Network Statistics</h3>
                     <div class="metric">
                         <span class="metric-label">Bytes Sent:</span>
                         <span class="metric-value" id="bytes-sent">-</span>
@@ -512,7 +539,7 @@ def dashboard():
                 </div>
                 
                 <div class="card">
-                    <h3><span class="emoji">🔗</span>Active Connections</h3>
+                    <h3><span class="icon">🔗</span>Active Connections</h3>
                     <div class="connections-list" id="connections-list">
                         Loading connections...
                     </div>
@@ -541,10 +568,10 @@ def dashboard():
                         const vpnStatusDiv = document.getElementById('vpn-status');
                         if (data.vpn_status === 'running') {
                             vpnStatusDiv.className = 'status-online';
-                            vpnStatusDiv.textContent = '✅ strongSwan Running with Real PQC';
+                            vpnStatusDiv.innerHTML = '✅ strongSwan Running with Real PQC';
                         } else {
                             vpnStatusDiv.className = 'status-offline';
-                            vpnStatusDiv.textContent = '❌ strongSwan Not Running';
+                            vpnStatusDiv.innerHTML = '❌ strongSwan Not Running';
                         }
                         
                         // Update metrics
@@ -595,6 +622,8 @@ def dashboard():
     </body>
     </html>
     '''
+    
+    return Response(dashboard_html, mimetype='text/html; charset=utf-8')
 
 @app.route('/api/status')
 @login_required
@@ -607,9 +636,14 @@ def api_status():
         # Get system metrics
         system_metrics = vpn_manager.get_system_metrics()
         
-        # Get real-time data from Redis
-        redis_data = redis_client.get('pqc_vpn_status')
-        real_time_data = json.loads(redis_data) if redis_data else {}
+        # Get real-time data from Redis if available
+        real_time_data = {}
+        if redis_client:
+            try:
+                redis_data = redis_client.get('pqc_vpn_status')
+                real_time_data = json.loads(redis_data) if redis_data else {}
+            except:
+                pass
         
         response_data = {
             'vpn_status': vpn_status.get('status', 'unknown'),
@@ -632,8 +666,26 @@ def api_status():
 def users():
     """User management page"""
     try:
+        # Ensure database exists
+        os.makedirs(os.path.dirname(vpn_manager.db_path), exist_ok=True)
+        
         conn = sqlite3.connect(vpn_manager.db_path)
         cursor = conn.cursor()
+        
+        # Create table if it doesn't exist
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE NOT NULL,
+                email TEXT,
+                auth_type TEXT DEFAULT 'pki',
+                psk_key TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_login TIMESTAMP,
+                status TEXT DEFAULT 'active'
+            )
+        ''')
+        
         cursor.execute('SELECT * FROM users ORDER BY created_at DESC')
         users = cursor.fetchall()
         conn.close()
@@ -653,12 +705,12 @@ def users():
             </tr>
             """
         
-        return f'''
+        users_page = f'''
         <!DOCTYPE html>
         <html>
         <head>
-            <title>PQC-VPN User Management</title>
             <meta charset="UTF-8">
+            <title>PQC-VPN User Management</title>
             <style>
                 body {{ font-family: Arial, sans-serif; margin: 0; padding: 20px; background: #f5f5f5; }}
                 .header {{ background: #007bff; color: white; padding: 20px; margin: -20px -20px 20px -20px; }}
@@ -777,6 +829,8 @@ def users():
         </body>
         </html>
         '''
+        
+        return Response(users_page, mimetype='text/html; charset=utf-8')
     except Exception as e:
         return f"Error loading users: {e}"
 
