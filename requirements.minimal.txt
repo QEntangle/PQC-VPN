@@ -1,0 +1,38 @@
+# PQC-VPN Minimal Requirements - Essential packages only
+# Use this for initial build, then add more packages incrementally
+
+# Core Web Framework
+Flask==3.0.0
+Flask-SQLAlchemy==3.1.1
+Werkzeug==3.0.1
+
+# Database Support
+SQLAlchemy==2.0.23
+psycopg2-binary==2.9.9
+redis==5.0.1
+
+# Basic Cryptography (without liboqs-python for now)
+cryptography>=41.0.0
+pyOpenSSL==23.3.0
+
+# Network Essentials
+netifaces==0.11.0
+netaddr==0.10.1
+dnspython==2.4.2
+
+# System Monitoring
+psutil==5.9.6
+
+# Configuration
+PyYAML==6.0.1
+pydantic==2.5.1
+
+# Web and API
+requests==2.31.0
+click>=8.0.0
+
+# Security
+bcrypt==4.1.2
+passlib==1.7.4
+
+# Essential only - no platform specific packages
